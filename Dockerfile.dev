@@ -1,0 +1,44 @@
+# Development image.
+#
+# The source is bind-mounted at run time, so this image exists to carry one
+# thing the host cannot lend it: node_modules. The LaserStream binding is a
+# native module with a per-platform build, so a macOS host's install is
+# unusable inside a Linux container and has to be redone here.
+#
+# Debian rather than Alpine: the binding publishes both glibc and musl builds,
+# but glibc is the better-trodden path for native Node addons.
+FROM node:22-bookworm-slim
+
+# The slim image carries no root certificates, and LaserStream is gRPC over
+# TLS: without these every connection fails as a bare "transport error" that
+# names neither TLS nor the cause.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Only the manifests first, so editing source does not invalidate the install
+# layer -- which is the slow one.
+COPY package.json package-lock.json ./
+
+# `npm install`, not `npm ci`, and not by preference.
+#
+# `@tailwindcss/oxide-wasm32-wasi` declares @emnapi/core and @emnapi/runtime as
+# dependencies, but npm never resolves that WASI branch on a macOS host, so the
+# committed lockfile has no entry for them. `npm ci` treats any such gap as
+# reason to refuse outright. `--omit=optional` is not a way out either: the
+# LaserStream native binding is itself an optional dependency, and dropping it
+# would leave the worker unable to open a stream.
+#
+# `npm install` resolves the gap on the platform that actually needs it. The
+# lockfile still pins every version it does contain.
+RUN npm install --no-audit --no-fund
+
+# Copied so the image is runnable on its own; the bind mount shadows it during
+# development.
+COPY . .
+
+EXPOSE 3000
+
+CMD ["npm", "run", "dev"]

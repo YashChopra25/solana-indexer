@@ -1,0 +1,9 @@
+# node_modules is reinstalled inside the image: the host's copy holds a native
+# LaserStream binding built for the host's platform, not the container's.
+node_modules
+.next
+
+.git
+.env
+*.tsbuildinfo
+npm-debug.log*

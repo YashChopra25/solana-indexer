@@ -1,69 +1,73 @@
-import Image from "next/image";
+'use client';
 
-export default function Home() {
+import { CounterRail, PageHead, StatusRail } from '@/components/console/shell';
+import { TransferFeed } from '@/components/console/feeds';
+import { Lookup } from '@/components/console/lookup';
+import { usePoll } from '@/hooks/use-poll';
+import { classifyHealth, formatCount, formatLag } from '@/lib/format';
+import type { IndexerStatus, Paginated, Transfer } from '@/lib/api-types';
+
+/**
+ * The index at a glance: how far behind it is, what it holds, and the token
+ * transfers arriving now. The lookup field turns it into a wallet explorer.
+ */
+export default function ActivityPage() {
+  const status = usePoll<IndexerStatus>('/api/status', 2_000);
+  const transfers = usePoll<Paginated<Transfer>>('/api/transfers?limit=20', 3_000);
+
+  const indexer = status.data?.indexer;
+  const totals = status.data?.totals;
+  const health = classifyHealth(indexer?.lagSeconds ?? null, indexer?.slotsProcessed ?? 0);
+
+  const behind = Math.max(
+    0,
+    (indexer?.estimatedTipSlot ?? 0) - (indexer?.lastProcessedSlot ?? 0),
+  );
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+    <main className="mx-auto w-full max-w-7xl">
+      <StatusRail
+        health={health}
+        detail={
+          status.error ? 'api unreachable' : `${formatCount(indexer?.slotsProcessed)} slots indexed`
+        }
+      />
+
+      <PageHead
+        eyebrow="behind the chain by"
+        value={indexer?.lastProcessedSlot ? formatLag(indexer.lagSeconds) : '—'}
+        note={
+          indexer?.lastProcessedSlot
+            ? `checkpoint ${indexer.lastProcessedSlot.toLocaleString()} · ≈ ${behind.toLocaleString()} slots`
+            : 'no data yet'
+        }
+        tone={health === 'live' ? 'var(--ink)' : health === 'idle' ? 'var(--dim)' : 'var(--signal)'}
+      />
+
+      <CounterRail
+        counters={[
+          { label: 'Transactions', value: totals?.transactions ?? 0 },
+          { label: 'Transfers', value: totals?.transfers ?? 0 },
+          { label: 'Swaps', value: totals?.swaps ?? 0 },
+          { label: 'Events', value: totals?.events ?? 0 },
+          { label: 'Accounts', value: totals?.accounts ?? 0 },
+          { label: 'Tokens', value: totals?.tokens ?? 0 },
+        ]}
+      />
+
+      <Lookup />
+
+      <section className="px-5 pb-16 pt-8 sm:px-8">
+        <h2 className="font-display text-[0.6875rem] font-600 uppercase tracking-[0.22em]">
+          Latest transfers
+        </h2>
+
+        <TransferFeed
+          transfers={transfers.data?.data ?? []}
+          loading={transfers.loading}
+          error={status.error ?? transfers.error}
         />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+      </section>
+    </main>
   );
 }

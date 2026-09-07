@@ -1,26 +1,76 @@
 @import "tailwindcss";
 
+/* ---------------------------------------------------------------------------
+   Console palette.
+
+   A marine-chart ground rather than the usual dark terminal: the operator is
+   reading instruments, and instruments read better on paper. Teal marks what
+   has been indexed; orange appears only when something is wrong or a value is
+   negative, so any warm colour on the page means something.
+   --------------------------------------------------------------------------- */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --ground: #e9eeef;
+  --ink: #0e1719;
+  --rule: #c8d3d5;
+  --rule-strong: #a9b8bb;
+  --deep: #0b5a61;
+  --signal: #c4441f;
+  --dim: #64777a;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
+/* The console has no theme toggle, so dark mode follows the operating system. */
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --ground: #0c1315;
+    --ink: #dde7e8;
+    --rule: #243436;
+    --rule-strong: #3a4d50;
+    --deep: #35b0b6;
+    --signal: #ec7048;
+    --dim: #7d9296;
   }
 }
 
+/*
+ * Only the fonts are mapped into Tailwind's theme, because only they are used
+ * as utilities (`font-display`, `font-data`). The colours above are read
+ * directly as `var(--…)` in inline styles, so generating `bg-*` / `text-*`
+ * utilities for them would produce classes nothing references.
+ */
+@theme inline {
+  --font-display: var(--font-archivo);
+  --font-data: var(--font-plex-mono);
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--ground);
+  color: var(--ink);
+}
+
+/*
+ * The counter rail's columns come from how many counters it was given, so a row
+ * is never left part-empty. Tailwind cannot express a class computed at render
+ * time, hence the custom property.
+ */
+@media (min-width: 640px) {
+  .counter-rail {
+    grid-template-columns: repeat(var(--counters, 4), minmax(0, 1fr));
+  }
+}
+
+/* Tabular figures keep slot numbers from shifting as they tick upward. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

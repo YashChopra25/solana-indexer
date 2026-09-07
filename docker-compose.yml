@@ -1,0 +1,118 @@
+# The whole project in containers: database, schema, API + console, worker.
+#
+#   docker compose up
+#
+# Source is bind-mounted, so edits reload exactly as they do on the host. The
+# one thing not shared is node_modules: the LaserStream binding is a native
+# module built per platform, so the container keeps its own install and the
+# anonymous volume below stops the host's from covering it.
+#
+# Postgres alone is still a service, so the host-based workflow is unchanged:
+#
+#   docker compose up -d postgres   # then npm run dev
+
+name: solana-indexer
+
+# Everything that runs this project's code shares one definition.
+x-app: &app
+  build:
+    context: .
+    dockerfile: Dockerfile.dev
+  # One image for all three: they run the same code and differ only in the
+  # command. Without a shared name Compose builds and stores it once per
+  # service, and rebuilding one leaves the others on a stale copy.
+  image: solana-indexer-dev
+  env_file:
+    # Optional, because only the worker truly needs it -- the console and API
+    # run without a Helius key.
+    - path: .env
+      required: false
+  environment:
+    # Overrides whatever .env says: inside the network the database is a service
+    # name, not localhost. Explicit `environment` wins over `env_file`.
+    DATABASE_URL: postgresql://indexer:indexer@postgres:5432/solana_indexer
+    # Bind-mounted source on macOS and Windows does not deliver filesystem
+    # events into the container, so the watcher has to poll to see edits.
+    WATCHPACK_POLLING: 'true'
+    CHOKIDAR_USEPOLLING: 'true'
+  volumes:
+    - .:/app
+    # Anonymous volumes: keep the container's own node_modules and build cache,
+    # rather than letting the bind mount above replace them with the host's.
+    - /app/node_modules
+    - /app/.next
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: solana-indexer-db
+    environment:
+      POSTGRES_USER: indexer
+      POSTGRES_PASSWORD: indexer
+      POSTGRES_DB: solana_indexer
+    ports:
+      # Published so host tooling -- psql, or `npm run dev` outside Docker --
+      # can still reach it.
+      - '5432:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      # Everything below waits on this, so it is the gate that makes `up`
+      # deterministic rather than a race.
+      test: ['CMD-SHELL', 'pg_isready -U indexer -d solana_indexer']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # Applies migrations once and exits. The worker would do this itself, but
+  # running it as its own step means the console never comes up against a
+  # database that has no tables yet.
+  migrate:
+    <<: *app
+    container_name: solana-indexer-migrate
+    command: npm run migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  web:
+    <<: *app
+    container_name: solana-indexer-web
+    # `next dev` binds loopback by default, which inside a container is
+    # unreachable from the host.
+    command: npm run dev -- -H 0.0.0.0
+    ports:
+      - '3000:3000'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  worker:
+    <<: *app
+    container_name: solana-indexer-worker
+    command: npm run indexer
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    # Deliberately not restarted. The worker exits non-zero when it falls too
+    # far behind, expecting a supervisor -- but in development the commonest
+    # reason it exits is a missing HELIUS_API_KEY, and restarting that forever
+    # buries the one line explaining it.
+    restart: 'no'
+
+  # Optional table browser:  docker compose --profile tools up
+  adminer:
+    image: adminer:5
+    container_name: solana-indexer-adminer
+    profiles: ['tools']
+    ports:
+      - '8080:8080'
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
