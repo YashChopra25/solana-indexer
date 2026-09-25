@@ -113,3 +113,19 @@ export function classifyHealth(lagSeconds: number | null, slotsProcessed: number
 
   return 'live';
 }
+
+/**
+ * "12s ago", "4m ago" — how a non-chain reader thinks about when something
+ * happened. Slot numbers stay on screen beside it for anyone who wants them.
+ */
+export function timeAgo(iso: string | null, now = Date.now()): string {
+  if (!iso) return 'just now';
+
+  const seconds = Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000));
+  if (seconds < 5) return 'just now';
+  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h ago`;
+
+  return `${Math.floor(seconds / 86_400)}d ago`;
+}

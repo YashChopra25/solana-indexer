@@ -1,7 +1,8 @@
 'use client';
 
-import { FeedState, Td, Th } from './shell';
-import { formatAmount, programName, truncate } from '@/lib/format';
+import Link from 'next/link';
+import { FeedState, Row, Table, Td, Th, When } from './shell';
+import { formatAmount, programName, timeAgo, truncate } from '@/lib/format';
 import type { AccountUpdate } from '@/lib/api-types';
 
 /**
@@ -28,45 +29,46 @@ export function AccountFeed({
 }) {
   return (
     <>
-      <div className="mt-4 overflow-x-auto">
-        <table className="w-full min-w-[44rem] border-collapse text-sm">
-          <thead>
-            <tr
-              className="text-left text-[0.625rem] uppercase tracking-[0.16em]"
-              style={{ color: 'var(--dim)' }}
-            >
-              <Th>Slot</Th>
-              <Th align="right">Lamports</Th>
-              <Th>Owner</Th>
-              <Th align="right">Data</Th>
+      {updates.length > 0 && (
+        <Table
+          minWidth="44rem"
+          head={
+            <>
+              <Th>When</Th>
+              <Th align="right">SOL balance</Th>
+              <Th>Owned by</Th>
+              <Th align="right">Data size</Th>
               <Th>Caused by</Th>
-            </tr>
-          </thead>
-          <tbody>
-            {updates.map((update) => (
-              <tr
-                key={`${update.slot}-${update.writeVersion}`}
-                className="border-b"
-                style={{ borderColor: 'var(--rule)' }}
-              >
-                <Td color="var(--dim)">{update.slot.toLocaleString()}</Td>
-                <Td align="right" color="var(--deep)">
-                  {formatAmount(update.lamports, 9)}
-                </Td>
-                <Td color="var(--dim)" title={update.owner.id}>
-                  {programName(update.owner)}
-                </Td>
-                <Td align="right" color="var(--dim)">
-                  {update.dataLength.toLocaleString()} B
-                </Td>
-                <Td color="var(--dim)" title={update.signature ?? ''}>
-                  {update.signature ? truncate(update.signature, 6, 6) : '—'}
-                </Td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </>
+          }
+        >
+          {updates.map((update) => (
+            <Row key={`${update.slot}-${update.writeVersion}`}>
+              <Td>
+                <When ago={timeAgo(update.observedAt)} slot={update.slot} />
+              </Td>
+              <Td align="right" color="var(--deep)">
+                {formatAmount(update.lamports, 9)} SOL
+              </Td>
+              <Td color="var(--dim)" title={update.owner.id}>
+                {programName(update.owner)}
+              </Td>
+              <Td align="right" color="var(--dim)">
+                {update.dataLength.toLocaleString()} B
+              </Td>
+              <Td color="var(--dim)" title={update.signature ?? ''}>
+                {update.signature ? (
+                  <Link href={`/?q=${update.signature}`} className="hover:underline">
+                    {truncate(update.signature, 6, 6)}
+                  </Link>
+                ) : (
+                  '—'
+                )}
+              </Td>
+            </Row>
+          ))}
+        </Table>
+      )}
 
       <FeedState
         error={error}
@@ -75,9 +77,9 @@ export function AccountFeed({
         emptyMessage={
           watched
             ? kind === 'program'
-              ? 'Subscribed by owner — this lists accounts the program writes to. Many programs own none: routers and aggregators operate on token and system accounts owned by those programs instead, so this stays empty while the watch is still working. The match count above is the one to read.'
-              : 'Subscribed — writes appear here the next time this account changes on chain.'
-            : 'Press Watch above. The worker then opens an accounts subscription for this address and records every write to it here.'
+              ? 'Watching. This lists accounts the app stores data in. Many apps own none — exchanges and routers work with token accounts owned by other programs — so this can stay empty while the watch is working. The match count above is the number to read.'
+              : 'Watching. Changes appear here the next time this account changes on-chain.'
+            : 'Press Watch above. The indexer then follows this address live and records every change to it here.'
         }
       />
     </>

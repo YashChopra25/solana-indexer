@@ -2,7 +2,19 @@
 
 import { use } from 'react';
 import Link from 'next/link';
-import { CounterRail, FeedState, PageHead, StatusRail, Td, Th } from '@/components/console/shell';
+import {
+  Address,
+  Badge,
+  CounterRail,
+  FeedState,
+  PageHead,
+  Row,
+  SectionHead,
+  StatusRail,
+  Table,
+  Td,
+  Th,
+} from '@/components/console/shell';
 import { WatchButton } from '@/components/console/watch-button';
 import { AccountFeed } from '@/components/console/account-feed';
 import { WatchStatus } from '@/components/console/watch-status';
@@ -29,157 +41,150 @@ export default function ProgramPage({ params }: { params: Promise<{ programId: s
   const watchEntry = useWatchEntry('program', programId);
 
   const program = detail.data;
-  const health = detail.error ? 'stalled' : program ? 'live' : 'idle';
+  // A dropped request with data still on screen is a hiccup, not an outage.
+  const health = program ? 'live' : detail.error ? 'stalled' : 'idle';
+
+  const eventTypes = program?.eventTypes ?? [];
+  const invocations = program?.invocations ?? [];
 
   return (
-    <main className="mx-auto w-full max-w-7xl">
+    <>
       <StatusRail
         health={health}
-        detail={program ? `${formatCount(program.invocationCount)} invocations` : 'reading'}
+        detail={program ? `${formatCount(program.invocationCount)} times used` : 'reading'}
       />
 
-      <PageHead
-        eyebrow="program"
-        value={program ? programName(program.program) : truncate(programId, 6, 6)}
-        note={programId}
-      />
+      <main className="mx-auto w-full max-w-7xl">
+        <PageHead
+          eyebrow="App (program)"
+          value={program ? programName(program.program) : truncate(programId, 6, 6)}
+          explain="A program is code that lives on Solana — an exchange, a game, a token. Every time a transaction uses it, that is one “use” below. Press Watch to follow it live."
+        >
+          <div className="mt-5 text-xs" style={{ color: 'var(--dim)' }}>
+            <Address value={programId} lead={12} tail={12} />
+          </div>
 
-      <div className="px-5 pb-6 sm:px-8">
-        <WatchButton kind="program" address={programId} watchlist={watchlist} />
-        <WatchStatus entry={watchEntry} />
-      </div>
+          <div className="mt-5">
+            <WatchButton kind="program" address={programId} watchlist={watchlist} />
+            <WatchStatus entry={watchEntry} />
+          </div>
+        </PageHead>
 
-      <CounterRail
-        counters={[
-          { label: 'Invocations', value: program?.invocationCount ?? 0 },
-          { label: 'Events', value: program?.eventCount ?? 0 },
-          { label: 'Event types', value: program?.eventTypes.length ?? 0 },
-          { label: 'Swaps', value: program?.swapCount ?? 0 },
-          { label: 'Account writes', value: program?.accountUpdates.length ?? 0 },
-        ]}
-      />
-
-      <section className="px-5 pt-8 sm:px-8">
-        <h2 className="font-display text-[0.6875rem] font-600 uppercase tracking-[0.22em]">
-          Account writes
-        </h2>
-        <p className="mt-2 max-w-xl text-sm leading-relaxed" style={{ color: 'var(--dim)' }}>
-          From the accounts subscription, which the worker opens only for watched
-          addresses.
-        </p>
-
-        <AccountFeed
-          updates={program?.accountUpdates ?? []}
-          loading={detail.loading}
-          error={detail.error}
-          kind="program"
-          watched={watchEntry !== null}
+        <CounterRail
+          counters={[
+            { label: 'Times used', value: program?.invocationCount ?? 0 },
+            { label: 'Events logged', value: program?.eventCount ?? 0 },
+            { label: 'Event kinds', value: eventTypes.length },
+            { label: 'Trades routed', value: program?.swapCount ?? 0 },
+            { label: 'Data changes', value: program?.accountUpdates.length ?? 0 },
+          ]}
         />
-      </section>
 
-      <section className="px-5 pt-8 sm:px-8">
-        <h2 className="font-display text-[0.6875rem] font-600 uppercase tracking-[0.22em]">
-          Event types
-        </h2>
+        <section className="px-4 pt-10 sm:px-8">
+          <SectionHead
+            title="Recent uses"
+            hint="Each row is one transaction that called this app. Click one to open it."
+          />
 
-        <div className="mt-4 overflow-x-auto">
-          <table className="w-full min-w-[36rem] border-collapse text-sm">
-            <thead>
-              <tr
-                className="text-left text-[0.625rem] uppercase tracking-[0.16em]"
-                style={{ color: 'var(--dim)' }}
-              >
-                <Th>Discriminator</Th>
-                <Th>Emitted via</Th>
-                <Th align="right">Count</Th>
-                <Th align="right">Last slot</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {(program?.eventTypes ?? []).map((type) => (
-                <tr
-                  key={`${type.discriminator}-${type.source}`}
-                  className="border-b"
-                  style={{ borderColor: 'var(--rule)' }}
-                >
-                  <Td color="var(--deep)">{type.discriminator}</Td>
-                  <Td color="var(--dim)">{type.source === 'cpi' ? 'self-CPI' : 'log'}</Td>
-                  <Td align="right">{type.count.toLocaleString()}</Td>
-                  <Td align="right" color="var(--dim)">
-                    {type.lastSlot?.toLocaleString() ?? '—'}
-                  </Td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        <FeedState
-          error={detail.error}
-          loading={detail.loading}
-          empty={(program?.eventTypes.length ?? 0) === 0}
-          emptyMessage="This program emits no Anchor events, or none have been indexed yet. Its invocations are below either way."
-        />
-      </section>
-
-      <section className="px-5 pb-16 pt-8 sm:px-8">
-        <h2 className="font-display text-[0.6875rem] font-600 uppercase tracking-[0.22em]">
-          Recent invocations
-        </h2>
-
-        <div className="mt-4 overflow-x-auto">
-          <table className="w-full min-w-[44rem] border-collapse text-sm">
-            <thead>
-              <tr
-                className="text-left text-[0.625rem] uppercase tracking-[0.16em]"
-                style={{ color: 'var(--dim)' }}
-              >
-                <Th>Slot</Th>
-                <Th>Transaction</Th>
-                <Th align="right">Depth</Th>
-                <Th align="right">Compute</Th>
-                <Th>Result</Th>
-                <Th align="right">Log lines</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {(program?.invocations ?? []).map((invocation) => (
-                <tr
-                  key={`${invocation.signature}-${invocation.invocationIndex}`}
-                  className="border-b"
-                  style={{ borderColor: 'var(--rule)' }}
-                >
-                  <Td color="var(--dim)">{invocation.slot.toLocaleString()}</Td>
+          {invocations.length > 0 && (
+            <Table
+              minWidth="44rem"
+              head={
+                <>
+                  <Th>Block</Th>
+                  <Th>Transaction</Th>
+                  <Th>Result</Th>
+                  <Th align="right">Compute used</Th>
+                  <Th align="right">Called from depth</Th>
+                </>
+              }
+            >
+              {invocations.map((invocation) => (
+                <Row key={`${invocation.signature}-${invocation.invocationIndex}`}>
+                  <Td color="var(--dim)">#{invocation.slot.toLocaleString()}</Td>
                   <Td title={invocation.signature}>
-                    <Link href={`/?q=${invocation.signature}`} style={{ color: 'var(--ink)' }}>
-                      {truncate(invocation.signature, 6, 6)}
+                    <Link href={`/?q=${invocation.signature}`} className="hover:underline">
+                      {truncate(invocation.signature, 8, 8)}
                     </Link>
                   </Td>
-                  <Td align="right" color="var(--dim)">
-                    {invocation.depth}
+                  <Td>
+                    <Badge tone={invocation.success ? 'var(--deep)' : 'var(--signal)'}>
+                      {invocation.success ? '✓ ok' : '✕ failed'}
+                    </Badge>
                   </Td>
                   <Td align="right" color="var(--dim)">
                     {invocation.computeUnits?.toLocaleString() ?? '—'}
                   </Td>
-                  <Td color={invocation.success ? 'var(--deep)' : 'var(--signal)'}>
-                    {invocation.success ? 'ok' : 'failed'}
-                  </Td>
                   <Td align="right" color="var(--dim)">
-                    {invocation.logs.length}
+                    {invocation.depth}
                   </Td>
-                </tr>
+                </Row>
               ))}
-            </tbody>
-          </table>
-        </div>
+            </Table>
+          )}
 
-        <FeedState
-          error={detail.error}
-          loading={detail.loading}
-          empty={(program?.invocations.length ?? 0) === 0}
-          emptyMessage="Nothing indexed for this program yet. Watch it above, and the worker will add it to the stream within a few seconds."
-        />
-      </section>
-    </main>
+          <FeedState
+            error={detail.error}
+            loading={detail.loading}
+            empty={invocations.length === 0}
+            emptyMessage="Nothing recorded for this app yet. Press Watch above and its activity will start appearing within a few seconds."
+          />
+        </section>
+
+        <section className="px-4 pt-12 sm:px-8">
+          <SectionHead
+            title="Event kinds"
+            hint="The different messages this app logs, by code. Naming them would need the app's own schema."
+          />
+
+          {eventTypes.length > 0 && (
+            <Table
+              minWidth="36rem"
+              head={
+                <>
+                  <Th>Event code</Th>
+                  <Th>Emitted via</Th>
+                  <Th align="right">Count</Th>
+                  <Th align="right">Last seen in block</Th>
+                </>
+              }
+            >
+              {eventTypes.map((type) => (
+                <Row key={`${type.discriminator}-${type.source}`}>
+                  <Td color="var(--violet)">{type.discriminator}</Td>
+                  <Td color="var(--dim)">{type.source === 'cpi' ? 'self-CPI' : 'log'}</Td>
+                  <Td align="right">{type.count.toLocaleString()}</Td>
+                  <Td align="right" color="var(--dim)">
+                    {type.lastSlot ? `#${type.lastSlot.toLocaleString()}` : '—'}
+                  </Td>
+                </Row>
+              ))}
+            </Table>
+          )}
+
+          <FeedState
+            error={detail.error}
+            loading={detail.loading}
+            empty={eventTypes.length === 0}
+            emptyMessage="This app logs no events, or none have been seen yet. Its uses above are recorded either way."
+          />
+        </section>
+
+        <section className="px-4 pb-20 pt-12 sm:px-8">
+          <SectionHead
+            title="Data changes"
+            hint="Changes to accounts this app stores data in. Only recorded while the app is being watched."
+          />
+
+          <AccountFeed
+            updates={program?.accountUpdates ?? []}
+            loading={detail.loading}
+            error={detail.error}
+            kind="program"
+            watched={watchEntry !== null}
+          />
+        </section>
+      </main>
+    </>
   );
 }

@@ -1,10 +1,19 @@
 'use client';
 
-import Link from 'next/link';
-import { FeedState, PageHead, StatusRail, Td, Th } from '@/components/console/shell';
+import {
+  Address,
+  Badge,
+  FeedState,
+  PageHead,
+  Row,
+  SectionHead,
+  StatusRail,
+  Table,
+  Td,
+  Th,
+} from '@/components/console/shell';
 import { usePoll } from '@/hooks/use-poll';
 import { useWatchlist } from '@/hooks/use-watchlist';
-import { truncate } from '@/lib/format';
 import type { WatchEntry, WatchKind } from '@/lib/api-types';
 
 /**
@@ -35,120 +44,112 @@ export default function WatchingPage() {
     (entry) => !local.has(`${entry.kind}:${entry.address}`),
   );
 
-  const health = watchlist.error || registry.error ? 'stalled' : 'live';
+  const health = watchlist.error || (registry.error && !registry.data) ? 'stalled' : 'live';
 
   return (
-    <main className="mx-auto w-full max-w-7xl">
+    <>
       <StatusRail
         health={health}
-        detail={`${watchlist.items.length} here · ${onServer.size} on the indexer`}
+        detail={`${watchlist.items.length} saved here · ${onServer.size} followed by the indexer`}
       />
 
-      <PageHead
-        eyebrow="watching"
-        value={watchlist.items.length.toLocaleString()}
-        note="saved in this browser · mirrored to the indexer's subscription"
-      />
+      <main className="mx-auto w-full max-w-7xl">
+        <PageHead
+          eyebrow="Your watchlist"
+          value={watchlist.items.length.toLocaleString()}
+          explain="Wallets and apps you asked the indexer to follow live. The list is saved in this browser; the indexer follows everything on it and records each change as it happens."
+        />
 
-      <section className="px-5 pt-4 sm:px-8">
-        <div className="mt-4 overflow-x-auto">
-          <table className="w-full min-w-[42rem] border-collapse text-sm">
-            <thead>
-              <tr
-                className="text-left text-[0.625rem] uppercase tracking-[0.16em]"
-                style={{ color: 'var(--dim)' }}
-              >
-                <Th>Kind</Th>
-                <Th>Address</Th>
-                <Th>Indexer</Th>
-                <Th>Added</Th>
-                <Th align="right">{''}</Th>
-              </tr>
-            </thead>
-            <tbody>
+        <section className="px-4 sm:px-8">
+          {watchlist.items.length > 0 && (
+            <Table
+              minWidth="42rem"
+              head={
+                <>
+                  <Th>Type</Th>
+                  <Th>Address</Th>
+                  <Th>Live status</Th>
+                  <Th>Added</Th>
+                  <Th />
+                </>
+              }
+            >
               {watchlist.items.map((item) => {
                 const subscribed = onServer.has(`${item.kind}:${item.address}`);
 
                 return (
-                  <tr
-                    key={`${item.kind}:${item.address}`}
-                    className="border-b"
-                    style={{ borderColor: 'var(--rule)' }}
-                  >
-                    <Td color="var(--dim)">{item.kind}</Td>
-                    <Td title={item.address}>
-                      <Link href={pathFor(item.kind, item.address)} style={{ color: 'var(--ink)' }}>
-                        {truncate(item.address, 8, 8)}
-                      </Link>
+                  <Row key={`${item.kind}:${item.address}`}>
+                    <Td color="var(--dim)">{item.kind === 'program' ? 'App' : 'Wallet'}</Td>
+                    <Td>
+                      <Address value={item.address} href={pathFor(item.kind, item.address)} lead={8} tail={8} />
                     </Td>
-                    <Td color={subscribed ? 'var(--deep)' : 'var(--signal)'}>
-                      {subscribed ? 'subscribed' : 'not subscribed'}
+                    <Td>
+                      <Badge tone={subscribed ? 'var(--deep)' : 'var(--signal)'}>
+                        {subscribed ? '● Following' : '○ Not connected'}
+                      </Badge>
                     </Td>
                     <Td color="var(--dim)">{new Date(item.addedAt).toLocaleString()}</Td>
-                    <td className="py-2.5 text-right">
+                    <td className="px-4 py-3 text-right">
                       <button
                         type="button"
                         onClick={() => void watchlist.unwatch(item.kind, item.address)}
-                        className="text-[0.625rem] uppercase tracking-[0.16em]"
+                        className="text-xs hover:underline"
                         style={{ color: 'var(--signal)' }}
                       >
-                        remove
+                        Remove
                       </button>
                     </td>
-                  </tr>
+                  </Row>
                 );
               })}
-            </tbody>
-          </table>
-        </div>
+            </Table>
+          )}
 
-        <FeedState
-          error={watchlist.error}
-          loading={watchlist.loading}
-          empty={watchlist.items.length === 0}
-          emptyMessage={
-            watchlist.supported
-              ? 'Nothing watched yet. Open a program or wallet and press Watch — it is saved in this browser and added to the indexer’s LaserStream subscription within a few seconds.'
-              : 'This browser has no IndexedDB, so a watchlist cannot be stored here.'
-          }
-        />
-      </section>
-
-      {elsewhere.length > 0 && (
-        <section className="px-5 pb-16 pt-10 sm:px-8">
-          <h2 className="font-display text-[0.6875rem] font-600 uppercase tracking-[0.22em]">
-            Also on the indexer
-          </h2>
-          <p className="mt-2 max-w-xl text-sm leading-relaxed" style={{ color: 'var(--dim)' }}>
-            The worker is subscribed to these, but they are not on this browser&apos;s list —
-            another browser asked for them. The subscription is shared; the list above is not.
-          </p>
-
-          <ul className="mt-4 space-y-1.5 text-sm">
-            {elsewhere.map((entry) => (
-              <li key={`${entry.kind}:${entry.address}`} className="flex items-baseline gap-3">
-                <span style={{ color: 'var(--dim)' }}>{entry.kind}</span>
-                <Link
-                  href={pathFor(entry.kind, entry.address)}
-                  className="tnum"
-                  style={{ color: 'var(--ink)' }}
-                >
-                  {truncate(entry.address, 8, 8)}
-                </Link>
-                <button
-                  type="button"
-                  onClick={() => void watchlist.watch(entry.kind, entry.address, entry.label)}
-                  className="text-[0.625rem] uppercase tracking-[0.16em]"
-                  style={{ color: 'var(--deep)' }}
-                >
-                  add here
-                </button>
-              </li>
-            ))}
-          </ul>
+          <FeedState
+            error={watchlist.error}
+            loading={watchlist.loading}
+            empty={watchlist.items.length === 0}
+            emptyMessage={
+              watchlist.supported
+                ? 'Nothing watched yet. Open any wallet or app and press Watch. It is saved in this browser, and the indexer starts following it within a few seconds.'
+                : 'This browser cannot store a watchlist (it has no IndexedDB).'
+            }
+          />
         </section>
-      )}
-    </main>
+
+        {elsewhere.length > 0 && (
+          <section className="px-4 pb-20 pt-12 sm:px-8">
+            <SectionHead
+              title="Also followed by the indexer"
+              hint="Another browser asked the indexer to follow these. The indexer's list is shared; the list above is only yours."
+            />
+
+            <ul className="panel mt-4 divide-y text-sm" style={{ borderColor: 'var(--rule)' }}>
+              {elsewhere.map((entry) => (
+                <li
+                  key={`${entry.kind}:${entry.address}`}
+                  className="flex flex-wrap items-center gap-4 px-4 py-3"
+                  style={{ borderColor: 'var(--rule)' }}
+                >
+                  <span className="w-14" style={{ color: 'var(--dim)' }}>
+                    {entry.kind === 'program' ? 'App' : 'Wallet'}
+                  </span>
+                  <Address value={entry.address} href={pathFor(entry.kind, entry.address)} lead={8} tail={8} />
+                  <button
+                    type="button"
+                    onClick={() => void watchlist.watch(entry.kind, entry.address, entry.label)}
+                    className="ml-auto text-xs hover:underline"
+                    style={{ color: 'var(--deep)' }}
+                  >
+                    + Add to my list
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+      </main>
+    </>
   );
 }
 

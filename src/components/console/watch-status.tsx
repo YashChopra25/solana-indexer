@@ -18,14 +18,14 @@ export function WatchStatus({ entry }: { entry: WatchEntry | null }) {
 
   return (
     <p
-      className="mt-3 text-[0.6875rem] uppercase tracking-[0.16em]"
+      className="mt-3 text-xs"
       style={{ color: matched > 0 ? 'var(--deep)' : 'var(--dim)' }}
     >
       {matched > 0
-        ? `subscribed · ${matched.toLocaleString()} updates matched${
-            entry.lastMatchedSlot ? ` · last at slot ${entry.lastMatchedSlot.toLocaleString()}` : ''
+        ? `● Following live · ${matched.toLocaleString()} updates seen${
+            entry.lastMatchedSlot ? ` · latest in block #${entry.lastMatchedSlot.toLocaleString()}` : ''
           }`
-        : 'subscribed · nothing matched yet'}
+        : '● Following live · nothing new since you started watching'}
     </p>
   );
 }

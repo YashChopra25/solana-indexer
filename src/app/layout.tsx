@@ -1,34 +1,34 @@
 import type { Metadata } from 'next';
-import { Archivo, IBM_Plex_Mono } from 'next/font/google';
+import { JetBrains_Mono, Space_Grotesk } from 'next/font/google';
 import './globals.css';
 
-// Archivo carries the display line; everything else is monospace, because
-// almost every value on this page is a slot number or a base58 hash.
-const archivo = Archivo({
-  variable: '--font-archivo',
+// Space Grotesk carries headings and numbers; everything else is monospace,
+// because almost every value on this page is a block number or an address.
+const spaceGrotesk = Space_Grotesk({
+  variable: '--font-space-grotesk',
   subsets: ['latin'],
   weight: ['500', '600', '700'],
 });
 
-const plexMono = IBM_Plex_Mono({
-  variable: '--font-plex-mono',
+const jetbrainsMono = JetBrains_Mono({
+  variable: '--font-jetbrains-mono',
   subsets: ['latin'],
   weight: ['400', '500', '600'],
 });
 
 export const metadata: Metadata = {
   title: 'Solana Indexer',
-  description: 'Real-time Solana transaction and transfer index.',
+  description: 'Live Solana activity — payments, trades and app events — explained in plain language.',
 };
 
 export default function RootLayout({ children }: LayoutProps<'/'>) {
   return (
     <html
       lang="en"
-      className={`${archivo.variable} ${plexMono.variable} h-full antialiased`}
+      className={`${spaceGrotesk.variable} ${jetbrainsMono.variable} h-full antialiased`}
       suppressHydrationWarning
     >
-      <body className="font-data min-h-full flex flex-col">{children}</body>
+      <body className="font-data min-h-full flex flex-col" suppressHydrationWarning>{children}</body>
     </html>
   );
 }

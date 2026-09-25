@@ -1,50 +1,22 @@
 'use client';
 
+import Link from 'next/link';
 import {
   ASSET_LABEL_CH,
   assetLabel,
   formatAmount,
   programName,
-  truncate,
+  timeAgo,
 } from '@/lib/format';
 import type { Activity, Amount, ProgramEvent, Swap, Transfer } from '@/lib/api-types';
-import { FeedState, Td, Th } from './shell';
+import { Address, Badge, FeedState, Row, Table, Td, Th, When } from './shell';
 
 /**
- * The four feeds, one per thing this indexer tracks. They are deliberately
- * plain tables: these are ledgers, and a ledger's job is to be scanned down a
- * column, not decorated.
+ * The four feeds, one per thing this indexer tracks. Each is a table, because
+ * these are ledgers and a ledger is scanned down a column — but the columns are
+ * named for what a person wants to know (when, who, how much) rather than for
+ * the chain's own fields.
  */
-
-function Table({ minWidth, head, children }: {
-  minWidth: string;
-  head: React.ReactNode;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="mt-4 overflow-x-auto">
-      <table className="w-full border-collapse text-sm" style={{ minWidth }}>
-        <thead>
-          <tr
-            className="text-left text-[0.625rem] uppercase tracking-[0.16em]"
-            style={{ color: 'var(--dim)' }}
-          >
-            {head}
-          </tr>
-        </thead>
-        <tbody>{children}</tbody>
-      </table>
-    </div>
-  );
-}
-
-function Row({ children }: { children: React.ReactNode }) {
-  return (
-    <tr className="border-b" style={{ borderColor: 'var(--rule)' }}>
-      {children}
-    </tr>
-  );
-}
 
 /**
  * An asset label in a slot of fixed width.
@@ -61,7 +33,7 @@ function Asset({ mint, symbol }: { mint: string; symbol: string | null }) {
   return (
     <span
       className="inline-block overflow-hidden align-bottom text-ellipsis whitespace-nowrap"
-      style={{ width: `${ASSET_LABEL_CH}ch` }}
+      style={{ width: `${ASSET_LABEL_CH}ch`, color: 'var(--dim)' }}
       title={mint}
     >
       {assetLabel(mint, symbol)}
@@ -75,11 +47,13 @@ function Value({ value }: { value: Amount | null }) {
 
   return (
     <>
-      {formatAmount(value.amount, value.decimals)}{' '}
-      <Asset mint={value.mint} symbol={value.symbol} />
+      {formatAmount(value.amount, value.decimals)} <Asset mint={value.mint} symbol={value.symbol} />
     </>
   );
 }
+
+const wallet = (address: string) => `/wallets/${address}`;
+const program = (id: string) => `/programs/${id}`;
 
 /* ------------------------------------------------------------------ */
 
@@ -94,44 +68,52 @@ export function TransferFeed({
 }) {
   return (
     <>
-      <Table
-        minWidth="46rem"
-        head={
-          <>
-            <Th>Slot</Th>
-            <Th>From</Th>
-            <Th>To</Th>
-            <Th align="right">Amount</Th>
-            <Th>Asset</Th>
-          </>
-        }
-      >
-        {transfers.map((transfer) => (
-          <Row key={`${transfer.signature}-${transfer.instructionIndex}-${transfer.innerIndex ?? 'top'}`}>
-            <Td color="var(--dim)">{transfer.slot.toLocaleString()}</Td>
-            {/* The owner is what an operator recognises; the token account is
-                the fallback when no balance snapshot named one. */}
-            <Td title={transfer.sourceOwner ?? transfer.source}>
-              {truncate(transfer.sourceOwner ?? transfer.source, 6, 6)}
-            </Td>
-            <Td title={transfer.destinationOwner ?? transfer.destination}>
-              {truncate(transfer.destinationOwner ?? transfer.destination, 6, 6)}
-            </Td>
-            <Td align="right" color="var(--deep)">
-              {formatAmount(transfer.amount, transfer.decimals)}
-            </Td>
-            <Td color="var(--dim)">
-              <Asset mint={transfer.mint} symbol={transfer.symbol} />
-            </Td>
-          </Row>
-        ))}
-      </Table>
+      {transfers.length > 0 && (
+        <Table
+          minWidth="46rem"
+          head={
+            <>
+              <Th>When</Th>
+              <Th>From</Th>
+              <Th>{''}</Th>
+              <Th>To</Th>
+              <Th align="right">Amount</Th>
+            </>
+          }
+        >
+          {transfers.map((transfer) => {
+            // The owner is who a person recognises; the token account is the
+            // fallback when no balance snapshot named one.
+            const from = transfer.sourceOwner ?? transfer.source;
+            const to = transfer.destinationOwner ?? transfer.destination;
+
+            return (
+              <Row key={`${transfer.signature}-${transfer.instructionIndex}-${transfer.innerIndex ?? 'top'}`}>
+                <Td>
+                  <When ago={timeAgo(transfer.blockTime)} slot={transfer.slot} />
+                </Td>
+                <Td>
+                  <Address value={from} href={wallet(from)} lead={5} tail={5} />
+                </Td>
+                <Td color="var(--dim)">→</Td>
+                <Td>
+                  <Address value={to} href={wallet(to)} lead={5} tail={5} />
+                </Td>
+                <Td align="right" color="var(--deep)">
+                  {formatAmount(transfer.amount, transfer.decimals)}{' '}
+                  <Asset mint={transfer.mint} symbol={transfer.symbol} />
+                </Td>
+              </Row>
+            );
+          })}
+        </Table>
+      )}
 
       <FeedState
         error={error}
         loading={loading}
         empty={transfers.length === 0}
-        emptyMessage="No transfers indexed yet. Start the worker with `npm run indexer`."
+        emptyMessage="No payments recorded yet. Start the indexer with `npm run indexer` and they will stream in here."
       />
     </>
   );
@@ -148,41 +130,49 @@ export function SwapFeed({
 }) {
   return (
     <>
-      <Table
-        minWidth="52rem"
-        head={
-          <>
-            <Th>Slot</Th>
-            <Th>Owner</Th>
-            <Th align="right">Sold</Th>
-            <Th align="right">Bought</Th>
-            <Th>Venue</Th>
-          </>
-        }
-      >
-        {swaps.map((swap) => (
-          <Row key={`${swap.signature}-${swap.owner}`}>
-            <Td color="var(--dim)">{swap.slot.toLocaleString()}</Td>
-            <Td title={swap.owner}>{truncate(swap.owner, 6, 6)}</Td>
-            <Td align="right" color="var(--signal)">
-              <Value value={swap.in} />
-            </Td>
-            <Td align="right" color="var(--deep)">
-              <Value value={swap.out} />
-            </Td>
-            <Td color="var(--dim)" title={swap.route.map((p) => p.id).join(' → ')}>
-              {programName(swap.program)}
-              {swap.route.length > 1 && ` +${swap.route.length - 1}`}
-            </Td>
-          </Row>
-        ))}
-      </Table>
+      {swaps.length > 0 && (
+        <Table
+          minWidth="52rem"
+          head={
+            <>
+              <Th>When</Th>
+              <Th>Trader</Th>
+              <Th align="right">Gave</Th>
+              <Th align="right">Got</Th>
+              <Th>Exchange</Th>
+            </>
+          }
+        >
+          {swaps.map((swap) => (
+            <Row key={`${swap.signature}-${swap.owner}`}>
+              <Td>
+                <When ago={timeAgo(swap.blockTime)} slot={swap.slot} />
+              </Td>
+              <Td>
+                <Address value={swap.owner} href={wallet(swap.owner)} lead={5} tail={5} />
+              </Td>
+              <Td align="right" color="var(--signal)">
+                −<Value value={swap.in} />
+              </Td>
+              <Td align="right" color="var(--deep)">
+                +<Value value={swap.out} />
+              </Td>
+              <Td title={swap.route.map((p) => p.id).join(' → ')}>
+                <Badge tone="var(--cyan)">
+                  {programName(swap.program)}
+                  {swap.route.length > 1 && ` +${swap.route.length - 1} hops`}
+                </Badge>
+              </Td>
+            </Row>
+          ))}
+        </Table>
+      )}
 
       <FeedState
         error={error}
         loading={loading}
         empty={swaps.length === 0}
-        emptyMessage="No swaps yet. Swaps are inferred from balance movement, so they appear once a signer's holdings change in two directions at once."
+        emptyMessage="No trades yet. A trade shows up when one wallet's balance goes down in one token and up in another inside the same transaction."
       />
     </>
   );
@@ -199,38 +189,46 @@ export function EventFeed({
 }) {
   return (
     <>
-      <Table
-        minWidth="48rem"
-        head={
-          <>
-            <Th>Slot</Th>
-            <Th>Program</Th>
-            <Th>Event type</Th>
-            <Th>Emitted via</Th>
-            <Th align="right">Payload</Th>
-          </>
-        }
-      >
-        {events.map((event) => (
-          <Row key={`${event.signature}-${event.eventIndex}`}>
-            <Td color="var(--dim)">{event.slot.toLocaleString()}</Td>
-            <Td title={event.program.id}>{programName(event.program)}</Td>
-            {/* The discriminator *is* the event's identity. Turning it into a
-                name would need the program's IDL, which we do not hold. */}
-            <Td color="var(--deep)">{event.discriminator}</Td>
-            <Td color="var(--dim)">{event.source === 'cpi' ? 'self-CPI' : 'log'}</Td>
-            <Td align="right" color="var(--dim)">
-              {byteLength(event.data)} bytes
-            </Td>
-          </Row>
-        ))}
-      </Table>
+      {events.length > 0 && (
+        <Table
+          minWidth="48rem"
+          head={
+            <>
+              <Th>When</Th>
+              <Th>App (program)</Th>
+              <Th>Event code</Th>
+              <Th>Emitted via</Th>
+              <Th align="right">Size</Th>
+            </>
+          }
+        >
+          {events.map((event) => (
+            <Row key={`${event.signature}-${event.eventIndex}`}>
+              <Td>
+                <When ago={timeAgo(event.blockTime)} slot={event.slot} />
+              </Td>
+              <Td title={event.program.id}>
+                <Link href={program(event.program.id)} className="hover:underline">
+                  {programName(event.program)}
+                </Link>
+              </Td>
+              {/* The discriminator *is* the event's identity. Turning it into a
+                  name would need the program's IDL, which we do not hold. */}
+              <Td color="var(--violet)">{event.discriminator}</Td>
+              <Td color="var(--dim)">{event.source === 'cpi' ? 'self-CPI' : 'log'}</Td>
+              <Td align="right" color="var(--dim)">
+                {byteLength(event.data)} bytes
+              </Td>
+            </Row>
+          ))}
+        </Table>
+      )}
 
       <FeedState
         error={error}
         loading={loading}
         empty={events.length === 0}
-        emptyMessage="No Anchor events yet. Only programs that emit them produce rows here, and the default tracked programs (System and SPL Token) do not."
+        emptyMessage="No app events yet. Only apps built with Anchor emit these, and the default tracked programs (System and SPL Token) do not."
       />
     </>
   );
@@ -250,39 +248,48 @@ export function ActivityFeed({
 }) {
   return (
     <>
-      <Table
-        minWidth="50rem"
-        head={
-          <>
-            <Th>Slot</Th>
-            <Th>Kind</Th>
-            <Th align="right">Value</Th>
-            <Th>Detail</Th>
-            <Th>Program</Th>
-          </>
-        }
-      >
-        {activity.map((row, index) => (
-          <Row key={`${row.signature}-${row.kind}-${index}`}>
-            <Td color="var(--dim)">{row.slot.toLocaleString()}</Td>
-            <Td color={kindTone(row)}>{kindLabel(row)}</Td>
-            <Td align="right" color={kindTone(row)}>
-              <Value value={row.primary} />
-            </Td>
-            <Td color="var(--dim)">
-              {row.kind === 'swap' && row.counter && (
-                <>
-                  for <Value value={row.counter} />
-                </>
-              )}
-              {row.kind === 'event' && row.discriminator}
-            </Td>
-            <Td color="var(--dim)" title={row.program.id}>
-              {programName(row.program)}
-            </Td>
-          </Row>
-        ))}
-      </Table>
+      {activity.length > 0 && (
+        <Table
+          minWidth="50rem"
+          head={
+            <>
+              <Th>When</Th>
+              <Th>What</Th>
+              <Th align="right">Amount</Th>
+              <Th>Detail</Th>
+              <Th>App</Th>
+            </>
+          }
+        >
+          {activity.map((row, index) => (
+            <Row key={`${row.signature}-${row.kind}-${index}`}>
+              <Td>
+                <When ago={timeAgo(row.blockTime)} slot={row.slot} />
+              </Td>
+              <Td>
+                <Badge tone={kindTone(row)}>{kindLabel(row)}</Badge>
+              </Td>
+              <Td align="right" color={kindTone(row)}>
+                {row.kind === 'transfer' && (row.direction === 'out' ? '−' : '+')}
+                <Value value={row.primary} />
+              </Td>
+              <Td color="var(--dim)">
+                {row.kind === 'swap' && row.counter && (
+                  <>
+                    for <Value value={row.counter} />
+                  </>
+                )}
+                {row.kind === 'event' && row.discriminator}
+              </Td>
+              <Td color="var(--dim)" title={row.program.id}>
+                <Link href={program(row.program.id)} className="hover:underline">
+                  {programName(row.program)}
+                </Link>
+              </Td>
+            </Row>
+          ))}
+        </Table>
+      )}
 
       <FeedState
         error={error}
@@ -295,15 +302,15 @@ export function ActivityFeed({
 }
 
 function kindLabel(row: Activity): string {
-  if (row.kind === 'swap') return 'swap';
-  if (row.kind === 'event') return 'event';
+  if (row.kind === 'swap') return '⇄ Trade';
+  if (row.kind === 'event') return '◆ App event';
 
-  return row.direction === 'out' ? 'sent' : 'received';
+  return row.direction === 'out' ? '↑ Sent' : '↓ Received';
 }
 
 function kindTone(row: Activity): string {
-  if (row.kind === 'event') return 'var(--dim)';
-  if (row.kind === 'swap') return 'var(--ink)';
+  if (row.kind === 'event') return 'var(--violet)';
+  if (row.kind === 'swap') return 'var(--cyan)';
 
   return row.direction === 'out' ? 'var(--signal)' : 'var(--deep)';
 }

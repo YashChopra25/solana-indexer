@@ -1,19 +1,21 @@
 'use client';
 
 import { useState, type FormEvent } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import bs58 from 'bs58';
 import { usePoll } from '@/hooks/use-poll';
-import { formatAmount, formatValue, programName, truncate } from '@/lib/format';
+import { formatAmount, formatValue, programName, timeAgo } from '@/lib/format';
 import type { TransactionDetail } from '@/lib/api-types';
+import { Address, Badge } from './shell';
 
 /**
- * One field for the two things an operator has in hand: a base58 address or a
+ * One field for the two things a person has in hand: an address or a
  * transaction signature. Their lengths tell them apart, so there is no mode to
  * pick first.
  *
  * An address opens its own page, where it can be watched. A signature has no
- * page of its own — it is one record, not a subject — so it expands here.
+ * page of its own — it is one record, not a subject — so it expands here. It
+ * also reads `?q=`, which is how other pages link to a transaction.
  */
 
 type Target =
@@ -33,10 +35,21 @@ function classify(input: string): Target | null {
   return null;
 }
 
+/** Well-known addresses, so a newcomer has something to click. */
+const EXAMPLES = [
+  { label: 'Jupiter (trading app)', address: 'JUP6LkbZbjS1jKKwapdHNC3AdS1Km9ZtqpSgHoDVFW7' },
+  { label: 'Token program', address: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' },
+];
+
 export function Lookup() {
   const router = useRouter();
-  const [query, setQuery] = useState('');
-  const [target, setTarget] = useState<Target | null>(null);
+  const initial = useSearchParams().get('q') ?? '';
+  const initialTarget = classify(initial);
+
+  const [query, setQuery] = useState(initial);
+  const [target, setTarget] = useState<Target | null>(
+    initialTarget?.kind === 'transaction' ? initialTarget : null,
+  );
   const [error, setError] = useState<string | null>(null);
 
   function onSubmit(event: FormEvent) {
@@ -46,7 +59,9 @@ export function Lookup() {
 
     if (!found) {
       setTarget(null);
-      setError('Enter a base58 address (32 bytes) or transaction signature (64 bytes).');
+      setError(
+        'That does not look like a Solana address or transaction ID. Paste one from a wallet app or an explorer — it is a long string of letters and numbers.',
+      );
       return;
     }
 
@@ -64,35 +79,46 @@ export function Lookup() {
   }
 
   return (
-    <section className="border-b px-5 py-6 sm:px-8" style={{ borderColor: 'var(--rule)' }}>
-      <form onSubmit={onSubmit} className="flex flex-wrap items-center gap-3">
-        <label
-          htmlFor="lookup"
-          className="text-[0.625rem] uppercase tracking-[0.18em]"
-          style={{ color: 'var(--dim)' }}
-        >
-          Look up
+    <section className="px-4 pt-8 sm:px-8">
+      <form onSubmit={onSubmit} className="grad-edge flex items-center gap-2 rounded-2xl p-1.5 pl-4">
+        <span aria-hidden style={{ color: 'var(--dim)' }}>
+          ⌕
+        </span>
+        <label htmlFor="lookup" className="sr-only">
+          Search a wallet, app or transaction
         </label>
-
         <input
           id="lookup"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Wallet or program address, or a transaction signature"
+          placeholder="Paste a wallet address, app address or transaction ID"
           spellCheck={false}
           autoComplete="off"
-          className="min-w-0 flex-1 border-b bg-transparent py-1.5 text-sm outline-none"
-          style={{ borderColor: 'var(--rule-strong)' }}
+          className="min-w-0 flex-1 bg-transparent py-2.5 text-sm outline-none placeholder:text-[var(--dim)]"
         />
-
         <button
           type="submit"
-          className="border px-4 py-1.5 text-[0.625rem] uppercase tracking-[0.18em] transition-colors"
-          style={{ borderColor: 'var(--deep)', color: 'var(--deep)' }}
+          className="font-display shrink-0 rounded-xl px-5 py-2.5 text-sm font-600 transition-transform hover:scale-[1.03] active:scale-[0.98]"
+          style={{ background: 'var(--gradient)', color: '#06060c' }}
         >
-          Read
+          Search
         </button>
       </form>
+
+      <p className="mt-3 flex flex-wrap items-center gap-2 text-xs" style={{ color: 'var(--dim)' }}>
+        Try:
+        {EXAMPLES.map((example) => (
+          <button
+            key={example.address}
+            type="button"
+            onClick={() => router.push(`/programs/${example.address}`)}
+            className="rounded-full border px-2.5 py-0.5 transition-colors hover:border-[var(--violet)]"
+            style={{ borderColor: 'var(--rule-strong)' }}
+          >
+            {example.label}
+          </button>
+        ))}
+      </p>
 
       {error && (
         <p className="mt-4 text-sm" style={{ color: 'var(--signal)' }}>
@@ -111,42 +137,39 @@ function TransactionResult({ signature }: { signature: string }) {
   const detail = usePoll<TransactionDetail>(`/api/transactions/${signature}`, 10_000);
   const tx = detail.data;
 
-  if (detail.error) {
-    return (
-      <p className="mt-4 text-sm" style={{ color: 'var(--signal)' }}>
-        {detail.error}
-      </p>
-    );
-  }
-
   if (!tx) {
     return (
-      <p className="mt-4 text-sm" style={{ color: 'var(--dim)' }}>
-        Reading the index…
-      </p>
+      <div className="panel mt-4 px-5 py-5 text-sm" style={{ color: detail.error ? 'var(--signal)' : 'var(--dim)' }}>
+        {detail.error ?? 'Reading the chain…'}
+      </div>
     );
   }
 
   return (
-    <div className="mt-6">
-      <dl className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
-        <Field label="Slot">{tx.slot.toLocaleString()}</Field>
-        <Field label="Status">
-          <span style={{ color: tx.success ? 'var(--deep)' : 'var(--signal)' }}>
-            {tx.success ? 'success' : 'failed'}
-          </span>
+    <div className="panel mt-4 px-5 py-5">
+      <div className="flex flex-wrap items-center gap-3">
+        <Badge tone={tx.success ? 'var(--deep)' : 'var(--signal)'}>
+          {tx.success ? '✓ Succeeded' : '✕ Failed'}
+        </Badge>
+        <Address value={tx.signature} lead={10} tail={10} />
+      </div>
+
+      <dl className="mt-5 grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
+        <Field label="When">
+          {timeAgo(tx.blockTime)} · block #{tx.slot.toLocaleString()}
         </Field>
-        <Field label="Fee">{formatAmount(tx.fee, 9)} SOL</Field>
-        <Field label="Programs">{tx.programs.length}</Field>
+        <Field label="Network fee">{formatAmount(tx.fee, 9)} SOL</Field>
+        <Field label="Paid by">
+          {tx.feePayer ? <Address value={tx.feePayer} href={`/wallets/${tx.feePayer}`} /> : '—'}
+        </Field>
+        <Field label="Apps involved">{tx.programs.map(programName).join(', ') || '—'}</Field>
       </dl>
 
-      <Section title="Transfers" count={tx.transfers.length}>
+      <Section title="Payments" count={tx.transfers.length}>
         {tx.transfers.map((transfer, index) => (
           <li key={index} className="flex flex-wrap items-baseline gap-x-2">
-            <span style={{ color: 'var(--dim)' }}>
-              {truncate(transfer.sourceOwner ?? transfer.source, 4, 4)} →{' '}
-              {truncate(transfer.destinationOwner ?? transfer.destination, 4, 4)}
-            </span>
+            <Address value={transfer.sourceOwner ?? transfer.source} />
+            <span style={{ color: 'var(--dim)' }}>sent</span>
             <span className="tnum" style={{ color: 'var(--deep)' }}>
               {formatValue({
                 mint: transfer.mint,
@@ -155,35 +178,35 @@ function TransactionResult({ signature }: { signature: string }) {
                 symbol: transfer.symbol,
               })}
             </span>
+            <span style={{ color: 'var(--dim)' }}>to</span>
+            <Address value={transfer.destinationOwner ?? transfer.destination} />
           </li>
         ))}
       </Section>
 
-      <Section title="Swaps" count={tx.swaps.length}>
+      <Section title="Trades" count={tx.swaps.length}>
         {tx.swaps.map((swap, index) => (
           <li key={index} className="flex flex-wrap items-baseline gap-x-2">
-            <span style={{ color: 'var(--dim)' }}>{truncate(swap.owner, 4, 4)}</span>
+            <Address value={swap.owner} />
+            <span style={{ color: 'var(--dim)' }}>traded</span>
             <span className="tnum" style={{ color: 'var(--signal)' }}>
               {formatValue(swap.in)}
             </span>
-            <span style={{ color: 'var(--dim)' }}>→</span>
+            <span style={{ color: 'var(--dim)' }}>for</span>
             <span className="tnum" style={{ color: 'var(--deep)' }}>
               {formatValue(swap.out)}
             </span>
-            <span style={{ color: 'var(--dim)' }}>via {programName(swap.program)}</span>
+            <span style={{ color: 'var(--dim)' }}>on {programName(swap.program)}</span>
           </li>
         ))}
       </Section>
 
-      <Section title="Events" count={tx.events.length}>
+      <Section title="App events" count={tx.events.length}>
         {tx.events.map((event, index) => (
           <li key={index} className="flex flex-wrap items-baseline gap-x-2">
             <span style={{ color: 'var(--dim)' }}>{programName(event.program)}</span>
-            <span className="tnum" style={{ color: 'var(--deep)' }}>
+            <span className="tnum" style={{ color: 'var(--violet)' }}>
               {event.discriminator}
-            </span>
-            <span style={{ color: 'var(--dim)' }}>
-              {event.source === 'cpi' ? 'self-CPI' : 'log'}
             </span>
           </li>
         ))}
@@ -194,11 +217,11 @@ function TransactionResult({ signature }: { signature: string }) {
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div>
-      <dt className="text-[0.625rem] uppercase tracking-[0.16em]" style={{ color: 'var(--dim)' }}>
+    <div className="min-w-0">
+      <dt className="text-xs" style={{ color: 'var(--dim)' }}>
         {label}
       </dt>
-      <dd className="tnum mt-1 text-sm">{children}</dd>
+      <dd className="tnum mt-1 truncate text-sm">{children}</dd>
     </div>
   );
 }
@@ -216,8 +239,8 @@ function Section({
   if (count === 0) return null;
 
   return (
-    <div className="mt-5">
-      <p className="text-[0.625rem] uppercase tracking-[0.16em]" style={{ color: 'var(--dim)' }}>
+    <div className="mt-5 border-t pt-4" style={{ borderColor: 'var(--rule)' }}>
+      <p className="text-xs" style={{ color: 'var(--dim)' }}>
         {title} · {count}
       </p>
       <ul className="mt-2 space-y-1.5 text-sm">{children}</ul>

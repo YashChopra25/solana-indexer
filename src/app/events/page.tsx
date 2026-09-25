@@ -1,13 +1,13 @@
 'use client';
 
-import { PageHead, StatusRail } from '@/components/console/shell';
+import { PageHead, SectionHead, StatusRail } from '@/components/console/shell';
 import { EventFeed } from '@/components/console/feeds';
 import { usePoll } from '@/hooks/use-poll';
 import { classifyHealth, formatCount } from '@/lib/format';
 import type { IndexerStatus, Paginated, ProgramEvent } from '@/lib/api-types';
 
 /**
- * Anchor events, kept as bytes. The event type column shows discriminators
+ * Anchor events, kept as bytes. The event code column shows discriminators
  * rather than names because naming them needs each program's IDL, and this
  * indexer holds none -- see docs/how-it-works.md.
  */
@@ -19,25 +19,28 @@ export default function EventsPage() {
   const health = classifyHealth(indexer?.lagSeconds ?? null, indexer?.slotsProcessed ?? 0);
 
   return (
-    <main className="mx-auto w-full max-w-7xl">
+    <>
       <StatusRail
         health={health}
-        detail={`${formatCount(status.data?.totals.events)} events indexed`}
+        detail={`${formatCount(status.data?.totals.events)} events recorded`}
       />
 
-      <PageHead
-        eyebrow="program events"
-        value={formatCount(status.data?.totals.events)}
-        note="anchor emit! and emit_cpi! · payloads kept as bytes"
-      />
-
-      <section className="px-5 pb-16 sm:px-8">
-        <EventFeed
-          events={events.data?.data ?? []}
-          loading={events.loading}
-          error={events.error}
+      <main className="mx-auto w-full max-w-7xl">
+        <PageHead
+          eyebrow="App events"
+          value={formatCount(status.data?.totals.events)}
+          explain="Apps on Solana can leave short messages on-chain when something happens — “order filled”, “reward claimed”. Each kind of message has a code. We record every one we see; reading what is inside needs the app's own schema, so here you see the code and its size."
         />
-      </section>
-    </main>
+
+        <section className="px-4 pb-20 sm:px-8">
+          <SectionHead title="Latest events" hint="Click an app to see everything it has done." />
+          <EventFeed
+            events={events.data?.data ?? []}
+            loading={events.loading}
+            error={events.error}
+          />
+        </section>
+      </main>
+    </>
   );
 }

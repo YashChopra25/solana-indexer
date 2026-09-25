@@ -26,8 +26,8 @@ export function WatchButton({
 
   if (!watchlist.supported) {
     return (
-      <span className="text-[0.625rem] uppercase tracking-[0.16em]" style={{ color: 'var(--dim)' }}>
-        watching needs IndexedDB
+      <span className="text-xs" style={{ color: 'var(--dim)' }}>
+        This browser cannot save a watchlist (no IndexedDB).
       </span>
     );
   }
@@ -49,17 +49,18 @@ export function WatchButton({
         onClick={() => void toggle()}
         disabled={busy || watchlist.loading}
         aria-pressed={watched}
-        className="border px-4 py-1.5 text-[0.625rem] uppercase tracking-[0.18em] transition-colors disabled:opacity-50"
-        style={{
-          borderColor: watched ? 'var(--signal)' : 'var(--deep)',
-          color: watched ? 'var(--signal)' : 'var(--deep)',
-        }}
+        className={`font-display rounded-xl px-5 py-2 text-sm font-600 transition-transform hover:scale-[1.03] active:scale-[0.98] disabled:opacity-50 ${watched ? 'border' : ''}`}
+        style={
+          watched
+            ? { borderColor: 'var(--signal)', color: 'var(--signal)' }
+            : { background: 'var(--gradient)', color: '#06060c' }
+        }
       >
-        {busy ? 'saving' : watched ? 'stop watching' : 'watch'}
+        {busy ? 'Saving…' : watched ? 'Stop watching' : '★ Watch'}
       </button>
 
       {watchlist.error && (
-        <span className="max-w-sm text-[0.6875rem]" style={{ color: 'var(--signal)' }}>
+        <span className="max-w-sm text-xs" style={{ color: 'var(--signal)' }}>
           {watchlist.error}
         </span>
       )}

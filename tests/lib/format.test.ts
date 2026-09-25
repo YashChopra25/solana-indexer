@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ASSET_LABEL_CH, assetLabel, formatValue, truncate } from '../../src/lib/format';
+import { ASSET_LABEL_CH, assetLabel, formatValue, timeAgo, truncate } from '../../src/lib/format';
 
 const NATIVE_SOL = 'So11111111111111111111111111111111111111111';
 const WRAPPED_SOL = 'So11111111111111111111111111111111111111112';
@@ -67,5 +67,18 @@ describe('formatValue', () => {
 
   it('has something to show for a row with no amount', () => {
     expect(formatValue(null)).toBe('—');
+  });
+});
+
+describe('timeAgo', () => {
+  const now = Date.parse('2026-01-01T00:10:00Z');
+
+  it('reads recent times in plain words', () => {
+    expect(timeAgo(null, now)).toBe('just now');
+    expect(timeAgo('2026-01-01T00:09:58Z', now)).toBe('just now');
+    expect(timeAgo('2026-01-01T00:09:30Z', now)).toBe('30s ago');
+    expect(timeAgo('2026-01-01T00:05:00Z', now)).toBe('5m ago');
+    expect(timeAgo('2025-12-31T21:10:00Z', now)).toBe('3h ago');
+    expect(timeAgo('2025-12-29T00:10:00Z', now)).toBe('3d ago');
   });
 });

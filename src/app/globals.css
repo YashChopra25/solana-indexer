@@ -3,33 +3,31 @@
 /* ---------------------------------------------------------------------------
    Console palette.
 
-   A marine-chart ground rather than the usual dark terminal: the operator is
-   reading instruments, and instruments read better on paper. Teal marks what
-   has been indexed; orange appears only when something is wrong or a value is
-   negative, so any warm colour on the page means something.
+   Solana's own colours: a near-black ground with the violet → green gradient
+   the chain uses for its brand. Green marks value arriving or a thing working;
+   rose appears only when something is wrong or value is leaving, so any warm
+   colour on the page means something. Violet and cyan are decoration only —
+   they never carry meaning, so a reader can ignore them.
+
+   The console is dark-only on purpose: it is meant to look like the chain's
+   own tools, and those are dark.
    --------------------------------------------------------------------------- */
 
 :root {
-  --ground: #e9eeef;
-  --ink: #0e1719;
-  --rule: #c8d3d5;
-  --rule-strong: #a9b8bb;
-  --deep: #0b5a61;
-  --signal: #c4441f;
-  --dim: #64777a;
-}
+  color-scheme: dark;
 
-/* The console has no theme toggle, so dark mode follows the operating system. */
-@media (prefers-color-scheme: dark) {
-  :root {
-    --ground: #0c1315;
-    --ink: #dde7e8;
-    --rule: #243436;
-    --rule-strong: #3a4d50;
-    --deep: #35b0b6;
-    --signal: #ec7048;
-    --dim: #7d9296;
-  }
+  --ground: #06060c;
+  --panel: #0e0d1a;
+  --ink: #eeedf7;
+  --rule: #1d1b31;
+  --rule-strong: #34315a;
+  --dim: #8c8aa8;
+  --deep: #14f195;
+  --signal: #ff5c8a;
+  --violet: #9945ff;
+  --cyan: #19c3ff;
+
+  --gradient: linear-gradient(100deg, var(--violet) 0%, var(--cyan) 55%, var(--deep) 100%);
 }
 
 /*
@@ -39,13 +37,59 @@
  * utilities for them would produce classes nothing references.
  */
 @theme inline {
-  --font-display: var(--font-archivo);
-  --font-data: var(--font-plex-mono);
+  --font-display: var(--font-space-grotesk);
+  --font-data: var(--font-jetbrains-mono);
 }
 
+/*
+ * The ground: two faint glows in the brand colours and a fine grid, fixed so
+ * the tables scroll over it. It sits on `body` rather than an extra element so
+ * no page has to remember to render it.
+ */
 body {
-  background: var(--ground);
   color: var(--ink);
+  background-color: var(--ground);
+  background-image:
+    radial-gradient(60rem 30rem at 10% -10%, color-mix(in oklab, var(--violet) 22%, transparent), transparent 70%),
+    radial-gradient(50rem 28rem at 100% 0%, color-mix(in oklab, var(--deep) 12%, transparent), transparent 70%),
+    linear-gradient(color-mix(in oklab, var(--rule) 55%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in oklab, var(--rule) 55%, transparent) 1px, transparent 1px);
+  background-size: auto, auto, 48px 48px, 48px 48px;
+  background-attachment: fixed;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--violet) 55%, transparent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* A glass card. Every table and reading on the site sits in one. */
+.panel {
+  background: color-mix(in oklab, var(--panel) 78%, transparent);
+  border: 1px solid var(--rule);
+  border-radius: 16px;
+  backdrop-filter: blur(10px);
+}
+
+/* The brand gradient as text, for headline numbers and the logo. */
+.grad-text {
+  background: var(--gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* A 1px gradient edge, used on the primary call to action and the search box. */
+.grad-edge {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--panel), var(--panel)) padding-box,
+    var(--gradient) border-box;
 }
 
 /*
@@ -63,6 +107,33 @@ body {
 .tnum {
   font-variant-numeric: tabular-nums;
   font-feature-settings: 'tnum' 1;
+}
+
+/* Rows glow briefly as they arrive, so new on-chain activity is visible. */
+@keyframes arrive {
+  from {
+    background: color-mix(in oklab, var(--deep) 12%, transparent);
+  }
+  to {
+    background: transparent;
+  }
+}
+
+.row {
+  animation: arrive 1.6s ease-out;
+  transition: background 150ms;
+}
+
+.row:hover {
+  background: color-mix(in oklab, var(--violet) 8%, transparent);
+}
+
+/* Hides the nav's scrollbar on phones while keeping it swipeable. */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -1,6 +1,6 @@
 'use client';
 
-import { PageHead, StatusRail } from '@/components/console/shell';
+import { PageHead, SectionHead, StatusRail } from '@/components/console/shell';
 import { SwapFeed } from '@/components/console/feeds';
 import { usePoll } from '@/hooks/use-poll';
 import { classifyHealth, formatCount } from '@/lib/format';
@@ -19,25 +19,31 @@ export default function SwapsPage() {
   const health = classifyHealth(indexer?.lagSeconds ?? null, indexer?.slotsProcessed ?? 0);
 
   return (
-    <main className="mx-auto w-full max-w-7xl">
+    <>
       <StatusRail
         health={health}
-        detail={`${formatCount(status.data?.totals.swaps)} swaps indexed`}
+        detail={`${formatCount(status.data?.totals.swaps)} trades found`}
       />
 
-      <PageHead
-        eyebrow="swaps detected"
-        value={formatCount(status.data?.totals.swaps)}
-        note="inferred from balance movement · every venue, no per-dex decoders"
-      />
-
-      <section className="px-5 pb-16 sm:px-8">
-        <SwapFeed
-          swaps={swaps.data?.data ?? []}
-          loading={swaps.loading}
-          error={swaps.error}
+      <main className="mx-auto w-full max-w-7xl">
+        <PageHead
+          eyebrow="Trades detected"
+          value={formatCount(status.data?.totals.swaps)}
+          explain="A trade (or “swap”) is when a wallet gives up one token and receives another in the same transaction — for example, selling USDC for SOL on an exchange like Jupiter or Raydium. We spot them by watching balances change, so every exchange is covered without special code for each one."
         />
-      </section>
-    </main>
+
+        <section className="px-4 pb-20 sm:px-8">
+          <SectionHead
+            title="Latest trades"
+            hint="Red is what the trader gave up, green is what they received."
+          />
+          <SwapFeed
+            swaps={swaps.data?.data ?? []}
+            loading={swaps.loading}
+            error={swaps.error}
+          />
+        </section>
+      </main>
+    </>
   );
 }

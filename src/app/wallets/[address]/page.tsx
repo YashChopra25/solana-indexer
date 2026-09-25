@@ -1,7 +1,8 @@
 'use client';
 
 import { use, useState } from 'react';
-import { CounterRail, PageHead, StatusRail } from '@/components/console/shell';
+import Link from 'next/link';
+import { Address, CounterRail, PageHead, SectionHead, StatusRail } from '@/components/console/shell';
 import { ActivityFeed } from '@/components/console/feeds';
 import { WatchButton } from '@/components/console/watch-button';
 import { AccountFeed } from '@/components/console/account-feed';
@@ -22,9 +23,9 @@ import type { AccountUpdate, Activity, ActivityKind, WalletPage } from '@/lib/ap
 
 const FILTERS: { label: string; kinds: ActivityKind[] | null }[] = [
   { label: 'Everything', kinds: null },
-  { label: 'Transfers', kinds: ['transfer'] },
-  { label: 'Swaps', kinds: ['swap'] },
-  { label: 'Events', kinds: ['event'] },
+  { label: 'Payments', kinds: ['transfer'] },
+  { label: 'Trades', kinds: ['swap'] },
+  { label: 'App events', kinds: ['event'] },
 ];
 
 export default function WalletPageView({ params }: { params: Promise<{ address: string }> }) {
@@ -42,81 +43,94 @@ export default function WalletPageView({ params }: { params: Promise<{ address: 
   const watchEntry = useWatchEntry('wallet', address);
 
   const rows = activity.data?.data ?? [];
-  const health = activity.error ? 'stalled' : activity.data ? 'live' : 'idle';
+  // A dropped request with rows still on screen is a hiccup, not an outage.
+  const health = activity.data ? 'live' : activity.error ? 'stalled' : 'idle';
 
   const count = (kind: ActivityKind) => rows.filter((row) => row.kind === kind).length;
 
   return (
-    <main className="mx-auto w-full max-w-7xl">
+    <>
       <StatusRail health={health} detail={`${rows.length} recent records`} />
 
-      <PageHead eyebrow="wallet" value={truncate(address, 6, 6)} note={address} />
-
-      <div className="px-5 pb-6 sm:px-8">
-        <WatchButton kind="wallet" address={address} watchlist={watchlist} />
-        <WatchStatus entry={watchEntry} />
-      </div>
-
-      <CounterRail
-        counters={[
-          { label: 'Shown', value: rows.length },
-          { label: 'Transfers', value: count('transfer') },
-          { label: 'Swaps', value: count('swap') },
-          { label: 'Events', value: count('event') },
-          { label: 'Account writes', value: accounts.data?.data.length ?? 0 },
-        ]}
-      />
-
-      <section className="px-5 pb-16 pt-8 sm:px-8">
-        <div className="flex flex-wrap items-baseline justify-between gap-4">
-          <h2 className="font-display text-[0.6875rem] font-600 uppercase tracking-[0.22em]">
-            Activity
-          </h2>
-
-          <div className="flex flex-wrap gap-3 text-[0.625rem] uppercase tracking-[0.16em]">
-            {FILTERS.map((option, index) => (
-              <button
-                key={option.label}
-                type="button"
-                onClick={() => setFilter(index)}
-                aria-pressed={filter === index}
-                className="border-b pb-0.5 transition-colors"
-                style={{
-                  color: filter === index ? 'var(--ink)' : 'var(--dim)',
-                  borderColor: filter === index ? 'var(--ink)' : 'transparent',
-                }}
-              >
-                {option.label}
-              </button>
-            ))}
+      <main className="mx-auto w-full max-w-7xl">
+        <PageHead
+          eyebrow="Wallet"
+          value={truncate(address, 6, 6)}
+          explain="Everything this address has done that the indexer has seen: money in and out, trades, and app activity. Press Watch to follow it live — the indexer will then record every change to it."
+        >
+          <div className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-3 text-xs" style={{ color: 'var(--dim)' }}>
+            <Address value={address} lead={12} tail={12} />
+            <Link href={`/programs/${address}`} className="underline-offset-4 hover:underline">
+              Is this an app? View as program →
+            </Link>
           </div>
-        </div>
 
-        <ActivityFeed
-          activity={rows}
-          loading={activity.loading}
-          error={activity.error}
-          emptyMessage={`Nothing indexed for ${truncate(address, 6, 6)} yet. Watch it above, and the worker will add it to the stream within a few seconds.`}
+          <div className="mt-5">
+            <WatchButton kind="wallet" address={address} watchlist={watchlist} />
+            <WatchStatus entry={watchEntry} />
+          </div>
+        </PageHead>
+
+        <CounterRail
+          counters={[
+            { label: 'Shown', value: rows.length },
+            { label: 'Payments', value: count('transfer') },
+            { label: 'Trades', value: count('swap') },
+            { label: 'App events', value: count('event') },
+            { label: 'Balance changes', value: accounts.data?.data.length ?? 0 },
+          ]}
         />
-      </section>
 
-      <section className="px-5 pb-16 sm:px-8">
-        <h2 className="font-display text-[0.6875rem] font-600 uppercase tracking-[0.22em]">
-          Account writes
-        </h2>
-        <p className="mt-2 max-w-xl text-sm leading-relaxed" style={{ color: 'var(--dim)' }}>
-          From the accounts subscription, which the worker opens only for watched
-          addresses.
-        </p>
+        <section className="px-4 pt-10 sm:px-8">
+          <SectionHead title="Activity" hint="Newest first. Green came in, red went out.">
+            <div
+              className="flex flex-wrap gap-1 rounded-full border p-1 text-sm"
+              style={{ borderColor: 'var(--rule-strong)' }}
+            >
+              {FILTERS.map((option, index) => (
+                <button
+                  key={option.label}
+                  type="button"
+                  onClick={() => setFilter(index)}
+                  aria-pressed={filter === index}
+                  className="rounded-full px-3 py-1 transition-colors"
+                  style={{
+                    color: filter === index ? 'var(--ink)' : 'var(--dim)',
+                    background:
+                      filter === index
+                        ? 'color-mix(in oklab, var(--violet) 22%, transparent)'
+                        : 'transparent',
+                  }}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </SectionHead>
 
-        <AccountFeed
-          updates={accounts.data?.data ?? []}
-          loading={accounts.loading}
-          error={accounts.error}
-          kind="wallet"
-          watched={watchEntry !== null}
-        />
-      </section>
-    </main>
+          <ActivityFeed
+            activity={rows}
+            loading={activity.loading}
+            error={activity.error}
+            emptyMessage={`Nothing recorded for ${truncate(address, 6, 6)} yet. Press Watch above and new activity will appear here within a few seconds.`}
+          />
+        </section>
+
+        <section className="px-4 pb-20 pt-12 sm:px-8">
+          <SectionHead
+            title="Balance changes"
+            hint="Every time this account's SOL balance or stored data changed. Only recorded while the address is being watched."
+          />
+
+          <AccountFeed
+            updates={accounts.data?.data ?? []}
+            loading={accounts.loading}
+            error={accounts.error}
+            kind="wallet"
+            watched={watchEntry !== null}
+          />
+        </section>
+      </main>
+    </>
   );
 }
