@@ -17,6 +17,7 @@
     "db:reset": "docker compose down -v && docker compose up -d postgres",
     "seed": "tsx scripts/seed-sample.ts",
     "tokens:sync": "tsx scripts/sync-tokens.ts",
+    "admin": "tsx scripts/admin.ts",
     "docker:up": "docker compose up",
     "docker:down": "docker compose down",
     "docker:build": "docker compose build"

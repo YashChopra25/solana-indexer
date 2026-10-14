@@ -297,14 +297,56 @@ a `pagination` object. Filters:
 - `/api/wallets/:address/activity` — `kind=transfer,swap,event`
 
 ```bash
-curl localhost:3000/api/swaps
-curl 'localhost:3000/api/events?source=cpi'
-curl 'localhost:3000/api/wallets/<address>/activity?kind=swap,transfer'
+curl -H "Authorization: Bearer $KEY" localhost:3000/api/swaps
+curl -H "Authorization: Bearer $KEY" 'localhost:3000/api/events?source=cpi'
+curl -H "Authorization: Bearer $KEY" 'localhost:3000/api/wallets/<address>/activity?kind=swap,transfer'
 ```
+
+Every endpoint except `/api/health` needs either an API key (customers) or a
+signed-in console session (you). See [Selling access](#selling-access).
+
+The full reference for customers lives at **`/docs`**. It's public and covers every
+endpoint's parameters, a sample request and a real sample response, and the
+error codes. Its content is in `src/app/docs/reference.ts`.
 
 Amounts come back as **strings** — lamport and token amounts are `u64` and can
 be larger than a JavaScript number holds. Each carries a `symbol`, which is
 `null` for most mints; `mint` is the identity, `symbol` is only a name.
+
+---
+
+## Selling access
+
+The API is sold by API key. Payments are recorded by hand; there is no payment
+provider. `src/proxy.ts` checks every request before it reaches a route.
+
+Manage customers on the **Customers** page of the console (`/admin`): add a
+customer, record a payment, change their plan, create a key (shown once, with
+a copy button) and revoke one. The same operations work from the terminal:
+
+```bash
+npm run admin -- customer add ana@acme.dev --plan starter --name "Acme"
+npm run admin -- payment add ana@acme.dev --amount 20 --months 1 --ref UPI-4821
+npm run admin -- key create ana@acme.dev --label production   # printed once, send it to them
+npm run admin -- customers                                    # who is paid up, usage this month
+npm run admin -- key revoke sk_iwaMhgo                        # by the prefix `keys <email>` shows
+```
+
+| A customer's request | Answer |
+| --- | --- |
+| No key, or an unknown or revoked one | `401` |
+| Key fine, but no payment covers today | `402` |
+| Monthly quota used up | `429`, until the 1st (UTC) |
+| Anything but `GET` | `403`, because keys are read-only and only you change the watchlist |
+| All good | the data, plus `X-Quota-Limit` and `X-Quota-Remaining` headers |
+
+- **Plans** are code, in `src/access/plans.ts` (starter 100k requests/month,
+  pro 1M). The database stores only the plan's name.
+- **A payment** extends access by `--months` from whichever is later, today or
+  the current end date, so paying early loses nothing.
+- **Keys** are stored as SHA-256 hashes. A database dump cannot call the API.
+- **The console** asks for `ADMIN_PASSWORD`. Leave it unset in development and
+  the console stays open. In production, unset means nobody can sign in.
 
 ---
 
@@ -316,6 +358,7 @@ to set is `HELIUS_API_KEY`.
 | Variable | Default | What it does |
 | --- | --- | --- |
 | `HELIUS_API_KEY` | — | Required by the worker; the console runs without it |
+| `ADMIN_PASSWORD` | — | Console login; unset keeps it open in development only |
 | `DATABASE_URL` | local docker | Postgres connection string |
 | `LASERSTREAM_ENDPOINT` | US East | Pick the region nearest you |
 | `COMMITMENT` | `confirmed` | `processed` \| `confirmed` \| `finalized` |
@@ -340,6 +383,7 @@ npm run dev        # console + API on :3000
 npm run indexer    # ingestion worker
 npm run seed       # sample data, no Helius key needed
 npm run tokens:sync # name the mints already indexed
+npm run admin      # customers, payments, API keys (see Selling access)
 npm test           # extractors, slot buffer, HTTP validation
 npm run migrate    # apply migrations (the worker does this too)
 

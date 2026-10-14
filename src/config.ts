@@ -45,6 +45,18 @@ export function heliusApiKey(): string {
 }
 
 /**
+ * The operator's password for the console. Customers never use it: they call
+ * the API with keys from `npm run admin`.
+ *
+ * Unset is allowed only in development, where the console stays open so a
+ * fresh checkout works with no setup. In production unset means nobody can
+ * sign in -- a forgotten variable locks the console rather than opening it.
+ */
+export const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || null;
+
+export const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+
+/**
  * How often the worker re-reads the watchlist.
  *
  * This is the whole channel between a browser and the worker, so it decides how

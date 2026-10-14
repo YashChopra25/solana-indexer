@@ -26,6 +26,7 @@ const PAGES = [
   { href: '/swaps', label: 'Trades' },
   { href: '/events', label: 'App events' },
   { href: '/watching', label: 'Watchlist' },
+  { href: '/admin', label: 'Customers' },
 ];
 
 export function StatusRail({ health, detail }: { health: Health; detail: string }) {
@@ -91,6 +92,16 @@ export function StatusRail({ health, detail }: { health: Health; detail: string 
               </Link>
             );
           })}
+
+          <form method="post" action="/api/logout" className="shrink-0">
+            <button
+              type="submit"
+              className="rounded-full px-3.5 py-1.5 transition-colors hover:text-[var(--ink)]"
+              style={{ color: 'var(--dim)' }}
+            >
+              Sign out
+            </button>
+          </form>
         </nav>
       </div>
     </header>
