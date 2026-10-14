@@ -84,7 +84,7 @@ services:
     # unreachable from the host.
     command: npm run dev -- -H 0.0.0.0
     ports:
-      - '3000:3000'
+      - '8003:8003'
     depends_on:
       migrate:
         condition: service_completed_successfully

@@ -198,10 +198,10 @@ async function main() {
   console.log('checkpoint       ', checkpoint?.lastProcessedSlot);
   console.log('');
   console.log('try:');
-  console.log(`  curl localhost:3000/api/swaps`);
-  console.log(`  curl localhost:3000/api/events`);
-  console.log(`  curl localhost:3000/api/wallets/${alice}/activity`);
-  console.log(`  curl localhost:3000/api/programs/${dex}`);
+  console.log(`  curl localhost:8003/api/swaps`);
+  console.log(`  curl localhost:8003/api/events`);
+  console.log(`  curl localhost:8003/api/wallets/${alice}/activity`);
+  console.log(`  curl localhost:8003/api/programs/${dex}`);
 
   await closePool();
 }

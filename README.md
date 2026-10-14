@@ -23,7 +23,7 @@ docker compose up
 ```
 
 Brings up Postgres, applies the migrations, then starts the API + console on
-http://localhost:3000 and the ingestion worker. The source is bind-mounted, so
+http://localhost:8003 and the ingestion worker. The source is bind-mounted, so
 edits reload exactly as they do on the host.
 
 Only the worker needs `HELIUS_API_KEY`; without it the console and API still
@@ -38,7 +38,7 @@ You need Node 20+ and Docker.
 npm install
 npm run db:up      # Postgres only, from the same compose file
 npm run seed       # writes one made-up slot through the real code
-npm run dev        # http://localhost:3000
+npm run dev        # http://localhost:8003
 ```
 
 `npm run seed` writes a slot containing one of everything — a SOL transfer, an
@@ -297,9 +297,9 @@ a `pagination` object. Filters:
 - `/api/wallets/:address/activity` — `kind=transfer,swap,event`
 
 ```bash
-curl -H "Authorization: Bearer $KEY" localhost:3000/api/swaps
-curl -H "Authorization: Bearer $KEY" 'localhost:3000/api/events?source=cpi'
-curl -H "Authorization: Bearer $KEY" 'localhost:3000/api/wallets/<address>/activity?kind=swap,transfer'
+curl -H "Authorization: Bearer $KEY" localhost:8003/api/swaps
+curl -H "Authorization: Bearer $KEY" 'localhost:8003/api/events?source=cpi'
+curl -H "Authorization: Bearer $KEY" 'localhost:8003/api/wallets/<address>/activity?kind=swap,transfer'
 ```
 
 Every endpoint except `/api/health` needs either an API key (customers) or a
@@ -379,7 +379,7 @@ events in too.
 ## Commands
 
 ```bash
-npm run dev        # console + API on :3000
+npm run dev        # console + API on :8003
 npm run indexer    # ingestion worker
 npm run seed       # sample data, no Helius key needed
 npm run tokens:sync # name the mints already indexed
