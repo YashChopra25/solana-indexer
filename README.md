@@ -387,6 +387,8 @@ npm run admin      # customers, payments, API keys (see Selling access)
 npm test           # extractors, slot buffer, HTTP validation
 npm run migrate    # apply migrations (the worker does this too)
 
+npm run up                # the whole project in containers, dev mode
+npm run up -- --deploy    # same, production build, detached, auto-restart
 npm run docker:up    # the whole project in containers
 npm run docker:down  # stop it
 npm run docker:build # rebuild the image after a dependency change

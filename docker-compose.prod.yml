@@ -1,0 +1,38 @@
+# Production overrides, layered on docker-compose.yml:
+#
+#   npm run up -- --deploy
+#
+# Runs the built image instead of the bind-mounted dev server, and keeps every
+# service running across crashes and reboots.
+
+x-prod: &prod
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: solana-indexer-prod
+  environment:
+    NODE_ENV: production
+
+services:
+  migrate:
+    <<: *prod
+    # Run the baked-in source, not the dev bind mount.
+    volumes: !reset []
+
+  web:
+    <<: *prod
+    # Run the baked-in source, not the dev bind mount.
+    volumes: !reset []
+    command: npm start -- -H 0.0.0.0
+    restart: always
+
+  worker:
+    <<: *prod
+    # Run the baked-in source, not the dev bind mount.
+    volumes: !reset []
+    # In production a supervisor is exactly what the worker expects: it exits
+    # when it falls too far behind and resumes from its checkpoint on restart.
+    restart: always
+
+  postgres:
+    restart: always
