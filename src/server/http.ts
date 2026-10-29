@@ -1,4 +1,5 @@
 import bs58 from 'bs58';
+import { refundIfBilled } from '../access/billing';
 import { createLogger, errorMessage } from '../lib/logger';
 
 /**
@@ -11,26 +12,51 @@ const log = createLogger('api');
 
 export class BadRequestError extends Error {}
 export class NotFoundError extends Error {}
+export class ConflictError extends Error {}
 
 /**
  * Wraps a route so it always answers with JSON and never leaks a stack trace.
- * The errors above are the ones we expect; anything else is a bug and becomes
- * a plain 500.
+ * The errors above are the ones we expect; a query cut off by the database's
+ * time limit is a 503 the caller can act on; anything else is a bug and
+ * becomes a plain 500. Any error answer hands a keyed request back to the
+ * customer's quota.
  */
 export async function respond<T>(route: string, handler: () => Promise<T>): Promise<Response> {
   try {
     return Response.json(await handler());
   } catch (err) {
-    if (err instanceof BadRequestError) return Response.json({ error: err.message }, { status: 400 });
-    if (err instanceof NotFoundError) return Response.json({ error: err.message }, { status: 404 });
-
-    log.error('unhandled error', { route, error: errorMessage(err) });
-    return Response.json({ error: 'internal server error' }, { status: 500 });
+    await refundIfBilled();
+    return errorResponse(route, err);
   }
+}
+
+function errorResponse(route: string, err: unknown): Response {
+  if (err instanceof BadRequestError) return Response.json({ error: err.message }, { status: 400 });
+  if (err instanceof NotFoundError) return Response.json({ error: err.message }, { status: 404 });
+  if (err instanceof ConflictError) return Response.json({ error: err.message }, { status: 409 });
+
+  // Postgres' query_canceled: the statement ran past its time limit.
+  if ((err as { code?: string }).code === '57014') {
+    log.warn('query timed out', { route });
+    return Response.json(
+      { error: 'this query is too broad to answer quickly; narrow it with a filter or a smaller page' },
+      { status: 503, headers: { 'Retry-After': '5' } },
+    );
+  }
+
+  log.error('unhandled error', { route, error: errorMessage(err) });
+  return Response.json({ error: 'internal server error' }, { status: 500 });
 }
 
 const DEFAULT_LIMIT = 25;
 const MAX_LIMIT = 100;
+
+/**
+ * Deepest page a caller may ask for. OFFSET makes Postgres walk and discard
+ * every row before it, so an unbounded one is a way to make a cheap query
+ * arbitrarily expensive.
+ */
+const MAX_OFFSET = 10_000;
 
 export interface Page {
   limit: number;
@@ -48,6 +74,9 @@ export function parsePage(params: URLSearchParams): Page {
   const offset = parseCount(params.get('offset'), 'offset') ?? 0;
 
   if (limit === 0) throw new BadRequestError('limit must be at least 1');
+  if (offset > MAX_OFFSET) {
+    throw new BadRequestError(`offset must be at most ${MAX_OFFSET}; narrow the query with a filter instead`);
+  }
 
   return { limit: Math.min(limit, MAX_LIMIT), offset };
 }

@@ -51,11 +51,41 @@ describe('SlotWindow', () => {
     expect(window.drainReady().map((b) => b.slot)).toEqual([100]);
   });
 
-  it('flushes a slot once the tip moves past the lag threshold', () => {
+  it('flushes a slot once block metadata has moved past the lag threshold', () => {
     const window = new SlotWindow(FLUSH_LAG);
     window.add(tx(100, 'a'));
-    window.noteTip(100 + FLUSH_LAG);
+    window.addBlock(block(100 + FLUSH_LAG));
 
+    expect(window.drainReady().map((b) => b.slot)).toEqual([100, 100 + FLUSH_LAG]);
+  });
+
+  it('does not count slot notifications as progress, so a replay is not cut short', () => {
+    const window = new SlotWindow(FLUSH_LAG);
+    window.add(tx(100, 'a'));
+    // The stream's slot ticks run ahead while it replays older transactions.
+    window.noteTip(10_000);
+
+    expect(window.drainReady()).toEqual([]);
+  });
+
+  it('drains at most the number asked for, oldest first, and counts only those out', () => {
+    const window = new SlotWindow(FLUSH_LAG);
+    for (const slot of [103, 101, 102]) {
+      window.add(tx(slot, `s${slot}`));
+      window.addBlock(block(slot));
+    }
+
+    expect(window.drainReady(2).map((b) => b.slot)).toEqual([101, 102]);
+    expect(window.transactionCount).toBe(1);
+    expect(window.drainReady().map((b) => b.slot)).toEqual([103]);
+  });
+
+  it('releases stragglers for slots the checkpoint has already passed', () => {
+    const window = new SlotWindow(FLUSH_LAG);
+    window.add(tx(100, 'late'));
+    expect(window.drainReady()).toEqual([]);
+
+    window.releaseThrough(100);
     expect(window.drainReady().map((b) => b.slot)).toEqual([100]);
   });
 
@@ -97,14 +127,41 @@ describe('SlotWindow', () => {
     expect(window.drainReady()).toEqual([]);
   });
 
-  it('releaseAll makes unfinished slots drainable at shutdown', () => {
+  it('keeps unfinished slots buffered, and reports the oldest one', () => {
     const window = new SlotWindow(FLUSH_LAG);
     window.add(tx(100, 'a'));
+    window.add(tx(101, 'b'));
+    window.addBlock(block(101));
 
-    expect(window.drainReady()).toEqual([]);
+    expect(window.drainReady().map((b) => b.slot)).toEqual([101]);
+    // 100 has no block yet, so the checkpoint must stay below it.
+    expect(window.oldestSlot()).toBe(100);
+  });
 
-    window.releaseAll();
-    expect(window.drainReady().map((b) => b.slot)).toEqual([100]);
+  it('restore puts a failed batch back, merged with anything that arrived since', () => {
+    const window = new SlotWindow(FLUSH_LAG);
+    window.add(tx(100, 'a'));
+    window.addBlock(block(100));
+
+    const drained = window.drainReady();
+    expect(window.transactionCount).toBe(0);
+
+    window.add(tx(100, 'b', 1));
+    window.restore(drained);
+
+    const [again] = window.drainReady();
+    expect(again.transactions.map((t) => t.signature)).toEqual(['a', 'b']);
+    expect(again.block?.slot).toBe(100);
+    expect(window.transactionCount).toBe(0);
+  });
+
+  it('counts each buffered transaction once', () => {
+    const window = new SlotWindow(FLUSH_LAG);
+    window.add(tx(100, 'a'));
+    window.add(tx(100, 'a'));
+    window.add(tx(101, 'b'));
+
+    expect(window.transactionCount).toBe(2);
   });
 
   it('tracks the highest slot it has been told about', () => {

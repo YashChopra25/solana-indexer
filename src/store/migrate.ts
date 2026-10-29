@@ -1,6 +1,6 @@
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { getPool } from './pool';
+import { getPool, type PoolClient } from './pool';
 import { createLogger } from '../lib/logger';
 
 const log = createLogger('migrate');
@@ -11,16 +11,35 @@ const log = createLogger('migrate');
  * schema is in place before anything touches it.
  */
 export async function runMigrations(): Promise<void> {
-  const pool = getPool();
+  // One session holds this lock for the whole run, so the worker and
+  // `npm run migrate` starting together take turns instead of racing to apply
+  // the same file. The number is arbitrary; it only has to be this project's.
+  // Everything runs on that one connection, so a pool of one is enough, and
+  // its time limit is lifted: waiting behind a long migration, or running one,
+  // is not a query gone wrong.
+  const client = await getPool().connect();
 
-  await pool.query(`
+  try {
+    await client.query('SET statement_timeout = 0');
+    await client.query('SELECT pg_advisory_lock(472019331)');
+    await applyPending(client);
+  } finally {
+    await client.query('SELECT pg_advisory_unlock(472019331)').catch(() => {});
+    // Handed back to the pool with the usual limit in force again.
+    await client.query('RESET statement_timeout').catch(() => {});
+    client.release();
+  }
+}
+
+async function applyPending(client: PoolClient): Promise<void> {
+  await client.query(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       name       TEXT PRIMARY KEY,
       applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
 
-  const { rows } = await pool.query<{ name: string }>('SELECT name FROM schema_migrations');
+  const { rows } = await client.query<{ name: string }>('SELECT name FROM schema_migrations');
   const applied = new Set(rows.map((row) => row.name));
 
   const dir = path.join(process.cwd(), 'migrations');
@@ -30,7 +49,6 @@ export async function runMigrations(): Promise<void> {
     if (applied.has(file)) continue;
 
     const sql = await readFile(path.join(dir, file), 'utf8');
-    const client = await pool.connect();
 
     try {
       // The schema change and its bookkeeping row commit together, so a
@@ -43,8 +61,6 @@ export async function runMigrations(): Promise<void> {
     } catch (err) {
       await client.query('ROLLBACK').catch(() => {});
       throw err;
-    } finally {
-      client.release();
     }
   }
 }

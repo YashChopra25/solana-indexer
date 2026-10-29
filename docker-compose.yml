@@ -28,7 +28,7 @@ x-app: &app
   environment:
     # Overrides whatever .env says: inside the network the database is a service
     # name, not localhost. Explicit `environment` wins over `env_file`.
-    DATABASE_URL: postgresql://indexer:indexer@postgres:5432/solana_indexer
+    DATABASE_URL: postgresql://indexer:${POSTGRES_PASSWORD:-indexer}@postgres:5432/solana_indexer
     # Bind-mounted source on macOS and Windows does not deliver filesystem
     # events into the container, so the watcher has to poll to see edits.
     WATCHPACK_POLLING: 'true'
@@ -46,7 +46,9 @@ services:
     container_name: solana-indexer-db
     environment:
       POSTGRES_USER: indexer
-      POSTGRES_PASSWORD: indexer
+      # Set POSTGRES_PASSWORD in .env before the first `up`: Postgres reads it
+      # only when it creates the data volume.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-indexer}
       POSTGRES_DB: solana_indexer
     # No `ports`: the database is reachable only by the other services on the
     # compose network, so it never collides with a Postgres already on the host.

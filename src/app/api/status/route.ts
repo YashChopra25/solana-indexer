@@ -1,4 +1,5 @@
 import { readIndexerState, readTotals } from '@/store/read';
+import { shared } from '@/server/cache';
 import { respond } from '@/server/http';
 
 export const dynamic = 'force-dynamic';
@@ -9,7 +10,11 @@ const SLOTS_PER_SECOND = 2.5;
 /** GET /api/status — how far along the indexer is, and what it has stored. */
 export async function GET() {
   return respond('/api/status', async () => {
-    const [state, totals] = await Promise.all([readIndexerState(), readTotals()]);
+    // Shared for a second: every open console asks this, and the answer only
+    // changes when the worker commits.
+    const [state, totals] = await shared('status', 1_000, () =>
+      Promise.all([readIndexerState(), readTotals()]),
+    );
 
     const lastBlockTime = state?.last_block_time ? new Date(state.last_block_time) : null;
     const lastProcessedSlot = Number(state?.last_processed_slot ?? 0);

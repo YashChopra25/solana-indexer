@@ -67,6 +67,27 @@ export function programLabel(programId: string): string | null {
   return LABELS.get(programId) ?? null;
 }
 
+/**
+ * Programs that own a large share of every account on the chain. Watching one
+ * means an accounts subscription by owner -- every token account, every
+ * wallet, every vote -- which no single stream should be asked to carry.
+ */
+const UNWATCHABLE_PROGRAMS = new Set([
+  ...INFRASTRUCTURE_PROGRAMS,
+  'Vote111111111111111111111111111111111111111',
+  'Stake11111111111111111111111111111111111111',
+  'Config1111111111111111111111111111111111111',
+  'BPFLoader2111111111111111111111111111111111',
+  'BPFLoaderUpgradeab1e11111111111111111111111',
+  'LoaderV411111111111111111111111111111111111',
+  'AddressLookupTab1e1111111111111111111111111',
+]);
+
+/** Whether watching this as a *program* would subscribe to most of the chain. */
+export function isUnwatchableProgram(programId: string): boolean {
+  return UNWATCHABLE_PROGRAMS.has(programId);
+}
+
 /** True for programs that are plumbing rather than an action in their own right. */
 export function isInfrastructure(programId: string): boolean {
   return INFRASTRUCTURE_PROGRAMS.has(programId);

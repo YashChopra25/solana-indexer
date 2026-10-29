@@ -1,7 +1,17 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { checkKey, hashKey, readKey } from '@/access/keys';
 import { PLANS, type PlanName } from '@/access/plans';
-import { CONSOLE_COOKIE, SESSION_COOKIE, isAdminSession, isHttps } from '@/access/session';
+import { BILLED_CUSTOMER_HEADER } from '@/access/billing';
+import { clientAddress, RateLimiter } from '@/access/rate-limit';
+import {
+  CONSOLE_COOKIE,
+  SESSION_COOKIE,
+  isAdminSession,
+  isHttps,
+  newVisitorCookie,
+  readVisitor,
+} from '@/access/session';
+import { PUBLIC_URL } from '@/config';
 import { createLogger, errorMessage } from '@/lib/logger';
 import { countRequest, findKey } from '@/store/access';
 
@@ -9,13 +19,15 @@ import { countRequest, findKey } from '@/store/access';
  * The one door every request comes through.
  *
  *  - The console is open to anyone: every page, and the /api/* calls those
- *    pages make from the browser, writes to the watchlist included.
+ *    pages make from the browser, writes to the watchlist included. Those calls
+ *    carry a signed `console` cookie the pages hand out, and are held to a pace
+ *    a person reading the console never notices but a scraper does.
  *  - A customer calls /api/* from their own code with
  *    `Authorization: Bearer sk_...`. The key must be live, paid up and under
- *    its monthly quota, and it can only read.
+ *    its monthly quota, and it can only read data.
  *  - /admin, where customers and their API keys are managed, needs the
  *    operator's session, signed in with ADMIN_PASSWORD.
- *  - Anything else calling /api/* without a key gets a 401.
+ *  - Anything else calling /api/* gets a 401.
  *
  * Doing this here rather than in each route means a new route is covered the
  * moment it exists, with nothing to remember.
@@ -26,15 +38,39 @@ const log = createLogger('access');
 /** Reachable by anyone, from anywhere: the way in and out, and the liveness probe. */
 const OPEN_PATHS = new Set(['/login', '/api/login', '/api/logout', '/api/health']);
 
+/**
+ * Per-client limits, so one script cannot drain Postgres or guess the admin
+ * password. An open console tab makes about thirty requests a minute.
+ *
+ * Console calls are limited per browser and, more loosely, per network, so a
+ * team behind one office address is not throttled as if it were one person.
+ * Keyed calls are limited per network before the key is even looked up, so
+ * made-up keys cost nothing, and then per key on top of its monthly quota.
+ */
+const LIMITS = {
+  visitor: new RateLimiter({ max: 90, windowMs: 60_000 }),
+  network: new RateLimiter({ max: 600, windowMs: 60_000 }),
+  keyNetwork: new RateLimiter({ max: 3_000, windowMs: 60_000 }),
+  key: new RateLimiter({ max: 1_200, windowMs: 60_000 }),
+  login: new RateLimiter({ max: 10, windowMs: 15 * 60_000 }),
+  watchlistWrite: new RateLimiter({ max: 30, windowMs: 60 * 60_000 }),
+};
+
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const isApi = pathname.startsWith('/api/');
   const isAdmin = isAdminSession(request.cookies.get(SESSION_COOKIE)?.value);
+  const client = clientAddress(request.headers);
 
-  if (OPEN_PATHS.has(pathname)) return NextResponse.next();
+  if (pathname === '/api/login' && request.method === 'POST') {
+    const limited = throttle(LIMITS.login, client, 'too many sign-in attempts; try again later');
+    if (limited) return limited;
+  }
+
+  if (OPEN_PATHS.has(pathname)) return passThrough(request);
 
   if (pathname === '/admin' || pathname.startsWith('/admin/')) {
-    if (isAdmin) return NextResponse.next();
+    if (isAdmin) return passThrough(request);
 
     const login = new URL('/login', publicOrigin(request));
     login.searchParams.set('next', pathname + request.nextUrl.search);
@@ -44,43 +80,94 @@ export async function proxy(request: NextRequest) {
   if (!isApi) return openPage(request);
 
   const key = readKey(request.headers);
-  if (key) return await admitKey(request, key);
+  if (key) {
+    const limited =
+      throttle(LIMITS.keyNetwork, client, 'too many requests from this network; slow down') ??
+      throttle(LIMITS.key, hashKey(key), 'too many requests for this key; slow down');
+    return limited ?? (await admitKey(request, key));
+  }
 
-  if (isAdmin || request.cookies.has(CONSOLE_COOKIE)) return NextResponse.next();
+  // The operator is trusted with everything, unthrottled.
+  if (isAdmin) return passThrough(request);
+
+  const visitor = readVisitor(request.cookies.get(CONSOLE_COOKIE)?.value);
+  if (!visitor || fromAnotherSite(request)) {
+    return Response.json(
+      { error: 'missing API key: send it as "Authorization: Bearer sk_..."' },
+      { status: 401 },
+    );
+  }
+
+  const write = request.method !== 'GET' && request.method !== 'HEAD';
+  const limited =
+    throttle(LIMITS.visitor, visitor, 'too many requests; slow down') ??
+    throttle(LIMITS.network, client, 'too many requests from this network; slow down') ??
+    (write ? throttle(LIMITS.watchlistWrite, client, 'too many watchlist changes; try again later') : null);
+
+  return limited ?? passThrough(request);
+}
+
+/**
+ * Whether the browser says this came from a page on another site. Browsers
+ * send Sec-Fetch-Site over https and on localhost; when it is missing (plain
+ * http) the cookie's SameSite=Lax is what keeps other sites out.
+ */
+function fromAnotherSite(request: NextRequest): boolean {
+  const site = request.headers.get('sec-fetch-site');
+  return site !== null && site !== 'same-origin' && site !== 'none';
+}
+
+/** A 429 if this client is over the limit, or null to carry on. */
+function throttle(limiter: RateLimiter, client: string, error: string): Response | null {
+  const verdict = limiter.hit(client);
+  if (verdict.ok) return null;
 
   return Response.json(
-    { error: 'missing API key: send it as "Authorization: Bearer sk_..."' },
-    { status: 401 },
+    { error },
+    { status: 429, headers: { 'Retry-After': String(verdict.retryAfter) } },
   );
+}
+
+/**
+ * Lets a request through with the billing header removed, so nobody can name
+ * a customer for a route to refund. Only `admitKey` sets it.
+ */
+function passThrough(request: NextRequest, billed?: number, headers?: Record<string, string>) {
+  const forwarded = new Headers(request.headers);
+  forwarded.delete(BILLED_CUSTOMER_HEADER);
+  if (billed !== undefined) forwarded.set(BILLED_CUSTOMER_HEADER, String(billed));
+
+  return NextResponse.next({ request: { headers: forwarded }, headers });
 }
 
 /**
  * This site as the browser reached it. request.url is built from the address
  * the server is bound to (0.0.0.0 in Docker), so a redirect made from it sends
- * people somewhere they cannot reach. The proxy must redirect to an absolute
- * URL, so it is rebuilt from the Host header, or a TLS proxy's forwarded one.
+ * people somewhere they cannot reach. PUBLIC_URL wins when it is set; otherwise
+ * it is rebuilt from the Host header, or a TLS proxy's forwarded one.
  */
 function publicOrigin(request: NextRequest): string {
+  if (PUBLIC_URL) return PUBLIC_URL;
+
   const host = request.headers.get('x-forwarded-host') ?? request.headers.get('host') ?? request.nextUrl.host;
   return `${isHttps(request) ? 'https' : 'http'}://${host}`;
 }
 
 /**
  * Every page but /admin is public. Serving one also hands the browser the
- * console cookie, which is what lets that page's own /api/* calls through
- * without a key.
+ * console cookie -- a random id for this browser, signed by this server --
+ * which is what lets that page's own /api/* calls through without a key, and
+ * what the watchlist records as the owner of an entry.
  *
- * SameSite=Lax keeps a page on another site from sending it, so other sites
- * cannot write to the watchlist through a visitor's browser. Anyone can get
- * the cookie by loading a page, though: it keeps the console free to use, it
- * does not lock the API. Plain cookies work over plain http, which the
- * browser's Sec-Fetch-* headers do not.
+ * Anyone can still get one by loading a page, so it is not a lock: what it
+ * does is tie every keyless call to one browser, whose pace is then capped.
+ * Paying for a key is the way past that.
  */
 function openPage(request: NextRequest): NextResponse {
-  const response = NextResponse.next();
+  const response = passThrough(request);
 
-  if (!request.cookies.has(CONSOLE_COOKIE)) {
-    response.cookies.set(CONSOLE_COOKIE, '1', {
+  if (!readVisitor(request.cookies.get(CONSOLE_COOKIE)?.value)) {
+    response.cookies.set(CONSOLE_COOKIE, newVisitorCookie(), {
       path: '/',
       httpOnly: true,
       sameSite: 'lax',
@@ -93,8 +180,11 @@ function openPage(request: NextRequest): NextResponse {
 }
 
 async function admitKey(request: NextRequest, key: string): Promise<Response> {
-  // Keys are for reading data. The watchlist decides what the indexer
-  // subscribes to, and is changed from the console, not by a customer's code.
+  // Keys are for reading chain data. The watchlist is the console's: it
+  // decides what the indexer subscribes to, and lists what visitors watch.
+  if (request.nextUrl.pathname === '/api/watchlist') {
+    return Response.json({ error: 'the watchlist is not part of the API' }, { status: 403 });
+  }
   if (request.method !== 'GET' && request.method !== 'HEAD') {
     return Response.json({ error: 'API keys are read-only' }, { status: 403 });
   }
@@ -122,7 +212,9 @@ async function admitKey(request: NextRequest, key: string): Promise<Response> {
       );
     }
 
-    return NextResponse.next({ headers });
+    // Counted now, so the quota holds under concurrency; the route hands the
+    // request back if it does not answer with data (see refundRequest).
+    return passThrough(request, customerId, headers);
   } catch (err) {
     log.error('key check failed', { error: errorMessage(err) });
     return Response.json({ error: 'internal server error' }, { status: 500 });

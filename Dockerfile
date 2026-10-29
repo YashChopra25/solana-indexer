@@ -10,12 +10,17 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY package.json package-lock.json ./
+# Everything below runs as the image's unprivileged `node` user, so a bug in
+# the app cannot write outside /app or touch the rest of the container.
+RUN chown node:node /app
+USER node
+
+COPY --chown=node:node package.json package-lock.json ./
 # `npm install` rather than `npm ci` for the reason given in Dockerfile.dev.
 # Dev dependencies stay: the worker and migrations run through tsx.
 RUN npm install --no-audit --no-fund
 
-COPY . .
+COPY --chown=node:node . .
 
 ENV NODE_ENV=production
 RUN npm run build

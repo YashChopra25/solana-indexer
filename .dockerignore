@@ -4,6 +4,16 @@ node_modules
 .next
 
 .git
-.env
+# Secrets never go into an image; containers get them from env_file at run time.
+.env*
+!.env.example
+*.pem
+*.key
+# Local scratch and tooling: nothing the app runs.
+ag-test.js
+.claude
+tests
+coverage
+backups
 *.tsbuildinfo
 npm-debug.log*

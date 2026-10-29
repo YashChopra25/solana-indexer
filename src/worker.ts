@@ -1,8 +1,8 @@
 import 'dotenv/config';
-import { closePool } from './store/pool';
+import { closePool, applyWorkerTimeouts } from './store/pool';
 import { runMigrations } from './store/migrate';
 import { Indexer } from './core/indexer';
-import { COMMITMENT, LASERSTREAM_ENDPOINT, TRACKED_PROGRAM_IDS } from './config';
+import { LASERSTREAM_ENDPOINT, TRACKED_PROGRAM_IDS, streamCommitment } from './config';
 import { createLogger, errorMessage } from './lib/logger';
 
 const log = createLogger('worker');
@@ -14,6 +14,7 @@ const log = createLogger('worker');
  * meet in Postgres. Neither needs the other to start.
  */
 async function main() {
+  applyWorkerTimeouts();
   await runMigrations();
 
   const controller = new AbortController();
@@ -32,7 +33,7 @@ async function main() {
 
   log.info('starting', {
     endpoint: LASERSTREAM_ENDPOINT,
-    commitment: COMMITMENT,
+    commitment: streamCommitment(),
     programs: TRACKED_PROGRAM_IDS,
   });
 
@@ -44,10 +45,10 @@ async function main() {
     log.info('stopped', indexer.getStats());
   }
 
-  // Stopping because we could not keep up is a failure, even though the
-  // shutdown itself was clean. Exit non-zero so a supervisor restarts us -- and
-  // a restart is all it takes, because the checkpoint is sound.
-  if (indexer.overloaded) process.exitCode = 1;
+  // Stopping because we could not keep up, or could not write, is a failure even
+  // though the shutdown itself was clean. Exit non-zero so a supervisor restarts
+  // us -- and a restart is all it takes, because the checkpoint is sound.
+  if (indexer.failed) process.exitCode = 1;
 }
 
 main().catch((err) => {

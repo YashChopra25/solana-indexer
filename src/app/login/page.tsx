@@ -16,7 +16,7 @@ export default async function LoginPage({
   const { next = '/admin', error } = await searchParams;
 
   return (
-    <main className="flex flex-1 items-center justify-center px-4 py-16">
+    <main id="main" className="flex flex-1 items-center justify-center px-4 py-16">
       <form
         method="post"
         action="/api/login"

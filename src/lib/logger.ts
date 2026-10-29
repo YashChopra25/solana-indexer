@@ -1,18 +1,37 @@
 type Detail = Record<string, unknown>;
+type Level = 'debug' | 'info' | 'warn' | 'error';
+
+const RANK: Record<Level, number> = { debug: 10, info: 20, warn: 30, error: 40 };
+
+/** `LOG_LEVEL=warn` hides info lines; unknown values fall back to info. */
+const THRESHOLD = RANK[(process.env.LOG_LEVEL ?? 'info').toLowerCase() as Level] ?? RANK.info;
 
 /**
- * Console logging with a scope prefix. Small on purpose: this is a local
- * development project, not something shipping logs to an aggregator.
+ * One JSON object per line in production, so `docker compose logs` can be fed
+ * to any log tool and filtered by level or scope. Development keeps the
+ * readable `[scope] message {...}` form.
  */
+const AS_JSON = (process.env.LOG_FORMAT ?? (process.env.NODE_ENV === 'production' ? 'json' : 'text')) === 'json';
+
+/** Console logging with a scope prefix. Small on purpose: no logging library. */
 export function createLogger(scope: string) {
-  const write = (stream: typeof console.log, message: string, detail?: Detail) => {
-    stream(`[${scope}] ${message}${detail ? ` ${JSON.stringify(detail, bigints)}` : ''}`);
+  const write = (level: Level, message: string, detail?: Detail) => {
+    if (RANK[level] < THRESHOLD) return;
+
+    const stream = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
+
+    if (AS_JSON) {
+      stream(JSON.stringify({ time: new Date().toISOString(), level, scope, message, ...detail }, bigints));
+    } else {
+      stream(`[${scope}] ${message}${detail ? ` ${JSON.stringify(detail, bigints)}` : ''}`);
+    }
   };
 
   return {
-    info: (message: string, detail?: Detail) => write(console.log, message, detail),
-    warn: (message: string, detail?: Detail) => write(console.warn, message, detail),
-    error: (message: string, detail?: Detail) => write(console.error, message, detail),
+    debug: (message: string, detail?: Detail) => write('debug', message, detail),
+    info: (message: string, detail?: Detail) => write('info', message, detail),
+    warn: (message: string, detail?: Detail) => write('warn', message, detail),
+    error: (message: string, detail?: Detail) => write('error', message, detail),
   };
 }
 

@@ -1,3 +1,4 @@
+import { shared } from '@/server/cache';
 import { findTransfers } from '@/store/read';
 import { assertAddress, assertOneOf, optional, paginate, parsePage, respond } from '@/server/http';
 import { serializeTransfer } from '@/server/serialize';
@@ -12,7 +13,8 @@ export const dynamic = 'force-dynamic';
 export async function GET(request: Request, ctx: { params: Promise<{ address: string }> }) {
   const { address } = await ctx.params;
 
-  return respond('/api/wallets/[address]/transfers', async () => {
+  // Shared briefly: every open console tab on this page asks the same thing.
+  return respond('/api/wallets/[address]/transfers', () => shared(`wallet-transfers:${address}?${new URL(request.url).searchParams}`, 2_000, async () => {
     assertAddress(address);
 
     const params = new URL(request.url).searchParams;
@@ -35,5 +37,5 @@ export async function GET(request: Request, ctx: { params: Promise<{ address: st
     const symbols = await symbolsOf(transferMints(data));
 
     return { address, data: data.map((row) => serializeTransfer(row, symbols)), pagination };
-  });
+  }));
 }

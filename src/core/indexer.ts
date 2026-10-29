@@ -1,7 +1,10 @@
 import {
   FLUSH_INTERVAL_MS,
   MAX_BUFFERED_SLOTS,
+  MAX_BUFFERED_TRANSACTIONS,
+  MAX_COMMIT_FAILURES,
   SLOTS_PER_COMMIT,
+  SUBSCRIPTION_RESYNC_MS,
   MAX_PENDING_ACCOUNT_UPDATES,
   SLOT_FLUSH_LAG,
   TOKEN_SYNC_BATCH,
@@ -14,6 +17,7 @@ import { persistAccountUpdates, persistSlots, readCheckpoint } from '../store/wr
 import { readWatchTargets, recordWatchMatches, type WatchTarget } from '../store/watchlist';
 import { findUncheckedMints, saveTokenMeta } from '../store/tokens';
 import { tryFetchTokenMeta } from '../chain/token-list';
+import { isUnwatchableProgram } from '../chain/programs';
 import { indexTransaction } from '../extract/transaction';
 import { createLogger, errorMessage } from '../lib/logger';
 import type { RawAccountUpdate, RawBlock, RawTransaction } from '../domain/types';
@@ -70,8 +74,24 @@ export class Indexer {
    */
   private committing: Promise<void> | null = null;
 
-  /** Set when the buffer outgrew its limit; the worker then exits non-zero. */
-  private fellBehind = false;
+  /**
+   * Why the worker stopped itself, if it did: the buffer outgrew its limit, or
+   * Postgres kept refusing commits. Either way it exits non-zero for its
+   * supervisor, and resumes from the checkpoint.
+   */
+  private failure: string | null = null;
+
+  /** Commit attempts in a row that have failed. */
+  private commitFailures = 0;
+
+  /** No commit is tried before this time; it backs off after each failure. */
+  private retryAt = 0;
+
+  /** The checkpoint as last committed: stragglers at or below it are released. */
+  private checkpoint = 0;
+
+  /** When the subscription was last sent to the stream. */
+  private subscribedAt = Date.now();
 
   /**
    * True while a symbol sweep is in flight, so a slow one is skipped rather
@@ -89,26 +109,32 @@ export class Indexer {
     return {
       ...this.stats,
       bufferedSlots: this.window.size,
+      bufferedTransactions: this.window.transactionCount,
       tipSlot: this.window.tipSlot,
       watching: this.watched.length,
     };
   }
 
-  get overloaded(): boolean {
-    return this.fellBehind;
+  /** Set when the worker stopped itself; it should then exit non-zero. */
+  get failed(): string | null {
+    return this.failure;
   }
 
   async run(signal: AbortSignal): Promise<void> {
-    const fromSlot = await this.resumeSlot();
-
     // Our own controller, so the overload guard below can end the stream exactly
-    // the way a SIGINT does rather than needing a second shutdown path.
+    // the way a SIGINT does rather than needing a second shutdown path. Wired
+    // up before the first await, and checked after each one: a signal that
+    // fired during startup must not be missed.
     const stop = new AbortController();
     const relay = () => stop.abort();
+    if (signal.aborted) return;
     signal.addEventListener('abort', relay, { once: true });
     this.stopStream = relay;
 
+    const fromSlot = await this.resumeSlot();
+    this.checkpoint = fromSlot === null ? 0 : fromSlot - 1;
     this.watched = await this.watchTargets();
+    if (stop.signal.aborted) return;
 
     if (!watchingAffectsIngestion(TRACKED_PROGRAM_IDS)) {
       log.warn('TRACKED_PROGRAM_IDS is empty, so every transaction is already ingested', {
@@ -158,15 +184,23 @@ export class Indexer {
    * the two processes as independent as they were designed to be -- neither has
    * to be running for the other to start.
    */
-  private async reconcileWatchlist(stream: { update(watched: WatchTarget[]): void }): Promise<void> {
+  private async reconcileWatchlist(stream: {
+    update(watched: WatchTarget[]): Promise<boolean>;
+  }): Promise<void> {
     const next = await this.watchTargets();
 
     const before = this.watched.map(targetKey);
     const after = next.map(targetKey);
-    if (sameSet(before, after)) return;
+    const due = Date.now() - this.subscribedAt >= SUBSCRIPTION_RESYNC_MS;
+    if (sameSet(before, after) && !due) return;
+
+    // Only remembered once the stream took it, so a rejected rewrite is tried
+    // again on the next poll instead of being mistaken for done.
+    if (!(await stream.update(next))) return;
 
     this.watched = next;
-    stream.update(next);
+    this.subscribedAt = Date.now();
+    if (sameSet(before, after)) return;
 
     log.info('subscription updated', {
       watching: next.length,
@@ -212,7 +246,11 @@ export class Indexer {
    */
   private async watchTargets(): Promise<WatchTarget[]> {
     try {
-      const targets = await readWatchTargets(getPool());
+      // Never subscribe by owner to a program that owns most of the chain, even
+      // if one reached the table before the API refused them.
+      const targets = (await readWatchTargets(getPool())).filter(
+        (t) => !(t.kind === 'program' && isUnwatchableProgram(t.address)),
+      );
       return targets.sort((a, b) => targetKey(a).localeCompare(targetKey(b)));
     } catch (err) {
       log.warn('could not read the watchlist', { error: errorMessage(err) });
@@ -302,16 +340,26 @@ export class Indexer {
    * than filling the heap and being killed with the buffer still in it.
    */
   private checkBacklog(): void {
-    if (this.fellBehind || this.window.size <= MAX_BUFFERED_SLOTS) return;
+    if (this.failure) return;
+    if (
+      this.window.size <= MAX_BUFFERED_SLOTS &&
+      this.window.transactionCount <= MAX_BUFFERED_TRANSACTIONS
+    ) {
+      return;
+    }
 
-    this.fellBehind = true;
-    log.error('too far behind, stopping', {
+    this.stop('too far behind', {
       bufferedSlots: this.window.size,
-      limit: MAX_BUFFERED_SLOTS,
+      bufferedTransactions: this.window.transactionCount,
+      limits: { slots: MAX_BUFFERED_SLOTS, transactions: MAX_BUFFERED_TRANSACTIONS },
       reason: 'slots are arriving faster than Postgres can take them',
-      recovery: 'restart to resume from the checkpoint',
     });
+  }
 
+  /** Ends the stream on purpose; the worker then exits non-zero. */
+  private stop(reason: string, detail: Record<string, unknown>): void {
+    this.failure = reason;
+    log.error(`${reason}, stopping`, { ...detail, recovery: 'restart to resume from the checkpoint' });
     this.stopStream();
   }
 
@@ -327,19 +375,36 @@ export class Indexer {
   /**
    * Commits every slot the buffer says is ready, several per Postgres
    * transaction. Each chunk lands whole or not at all, together with its
-   * checkpoint bump, so a chunk that fails is simply replayed after a restart.
+   * checkpoint bump.
+   *
+   * A chunk that fails goes back into the buffer with everything after it, and
+   * the next flush tries again. Dropping it instead would let the next chunk
+   * move the checkpoint past it, and those slots would be gone for good.
    */
   private async commitReady(): Promise<void> {
+    // After a failure, wait out the backoff rather than hammering a database
+    // that is already struggling; blocks keep asking for a flush meanwhile.
+    if (Date.now() < this.retryAt) return;
+
     await this.commitAccountUpdates();
     await this.flushWatchMatches();
 
-    const ready = this.window.drainReady();
+    this.window.releaseThrough(this.checkpoint);
 
-    for (let start = 0; start < ready.length; start += SLOTS_PER_COMMIT) {
-      const chunk = ready.slice(start, start + SLOTS_PER_COMMIT);
+    for (;;) {
+      const chunk = this.window.drainReady(SLOTS_PER_COMMIT);
+      if (chunk.length === 0) return;
 
       try {
-        const written = await withTransaction((client) => persistSlots(client, chunk));
+        // Never past a slot still being buffered: it may be older than this
+        // chunk, and a restart resumes from the checkpoint.
+        const oldest = this.window.oldestSlot();
+        const newest = chunk[chunk.length - 1].slot;
+        const checkpoint = oldest === null ? newest : Math.min(newest, oldest - 1);
+
+        const written = await withTransaction((client) => persistSlots(client, chunk, checkpoint));
+        this.checkpoint = Math.max(this.checkpoint, checkpoint);
+        this.commitFailures = 0;
 
         this.stats.slots += chunk.length;
         this.stats.transactions += written.transactions;
@@ -347,25 +412,29 @@ export class Indexer {
         this.stats.swaps += written.swaps;
         this.stats.events += written.events;
       } catch (err) {
-        // Stop here rather than committing later chunks: the checkpoint must not
-        // move past a slot that failed, or that slot is lost for good.
-        log.error('could not commit slots', {
+        // Keep the chunk for the next attempt; everything after it is still
+        // in the buffer.
+        this.window.restore(chunk);
+        this.commitFailures++;
+        const delay = Math.min(30_000, 500 * 2 ** this.commitFailures);
+        this.retryAt = Date.now() + delay;
+
+        log.error('could not commit slots, will retry', {
           from: chunk[0].slot,
-          to: chunk[chunk.length - 1].slot,
-          dropped: ready.length - start,
+          to: newestOf(chunk),
+          attempt: this.commitFailures,
+          retryInMs: delay,
           error: errorMessage(err),
         });
+
+        if (this.commitFailures >= MAX_COMMIT_FAILURES) {
+          this.stop('Postgres keeps refusing commits', { attempts: this.commitFailures });
+        }
         return;
       }
     }
   }
 
-  /**
-   * Writes whatever account updates have arrived since the last flush.
-   *
-   * Taken out of the buffer before the await, so updates that arrive during the
-   * write are kept for the next round rather than lost with it.
-   */
   /** Writes the match tallies, taken before the await so nothing is lost. */
   private async flushWatchMatches(): Promise<void> {
     if (this.watchMatches.size === 0) return;
@@ -376,7 +445,15 @@ export class Indexer {
     try {
       await recordWatchMatches(getPool(), matches);
     } catch (err) {
-      log.warn('could not record watch matches', { error: errorMessage(err) });
+      // Merged back, so the counts are late rather than wrong.
+      for (const [name, { count, slot }] of matches) {
+        const seen = this.watchMatches.get(name);
+        this.watchMatches.set(name, {
+          count: (seen?.count ?? 0) + count,
+          slot: Math.max(seen?.slot ?? 0, slot),
+        });
+      }
+      log.warn('could not record watch matches, will retry', { error: errorMessage(err) });
     }
   }
 
@@ -391,7 +468,16 @@ export class Indexer {
         persistAccountUpdates(client, batch),
       );
     } catch (err) {
-      log.error('could not write account updates', {
+      // Back in front of anything newer, still under the cap -- the oldest go
+      // first, as they would have anyway.
+      this.pendingAccounts = batch.concat(this.pendingAccounts);
+      const overflow = this.pendingAccounts.length - MAX_PENDING_ACCOUNT_UPDATES;
+      if (overflow > 0) {
+        this.pendingAccounts.splice(0, overflow);
+        this.stats.droppedAccountUpdates += overflow;
+      }
+
+      log.error('could not write account updates, will retry', {
         count: batch.length,
         error: errorMessage(err),
       });
@@ -399,15 +485,21 @@ export class Indexer {
   }
 
   /**
-   * On shutdown, commit what is buffered instead of throwing it away.
+   * On shutdown, commit every slot that is finished.
    *
-   * The first await lets a commit that is already running finish — it has
-   * drained slots out of the buffer already, and abandoning it would lose them.
-   * Only then is the rest released and written.
+   * The first await lets a commit that is already running finish -- it has
+   * drained slots out of the buffer already. Slots still unfinished are left
+   * alone: committing them would mark half-received slots as done. The
+   * checkpoint stays below them, so the stream replays them on restart.
    */
   private async flushAll(): Promise<void> {
     await this.flush();
-    this.window.releaseAll();
+    // One last try even if a failure had it backing off.
+    this.retryAt = 0;
     await this.flush();
   }
+}
+
+function newestOf(chunk: { slot: number }[]): number {
+  return chunk[chunk.length - 1].slot;
 }

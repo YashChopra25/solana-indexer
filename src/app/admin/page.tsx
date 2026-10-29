@@ -1,4 +1,7 @@
+import { cookies } from 'next/headers';
+import { redirect } from 'next/navigation';
 import { PLANS, isPlan } from '@/access/plans';
+import { SESSION_COOKIE, isAdminSession } from '@/access/session';
 import { Badge, PageHead, SectionHead, StatusRail } from '@/components/console/shell';
 import { listCustomers, listKeys, type CustomerSummary, type KeySummary } from '@/store/access';
 import { ActionForm, Field, PlanSelect } from './action-form';
@@ -21,6 +24,10 @@ const PLAN_NAMES = Object.keys(PLANS);
  * The same operations as `npm run admin`, with forms.
  */
 export default async function AdminPage() {
+  // Checked here as well as in the proxy: this page lists every customer, so
+  // it must not depend on one layer getting every path variation right.
+  if (!isAdminSession((await cookies()).get(SESSION_COOKIE)?.value)) redirect('/login?next=/admin');
+
   const customers = await listCustomers();
   const keys = await Promise.all(customers.map((customer) => listKeys(customer.email)));
 
@@ -34,7 +41,7 @@ export default async function AdminPage() {
         detail={`${customers.length} customers · ${active} paid up`}
       />
 
-      <main className="mx-auto w-full max-w-7xl pb-16">
+      <main id="main" className="mx-auto w-full max-w-7xl pb-16">
         <PageHead
           eyebrow="Paying customers"
           value={active.toLocaleString()}

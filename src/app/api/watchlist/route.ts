@@ -1,5 +1,24 @@
-import { addWatched, listWatched, removeWatched, type WatchKind } from '@/store/watchlist';
-import { assertAddress, assertOneOf, respond, BadRequestError, NotFoundError } from '@/server/http';
+import { cookies } from 'next/headers';
+import { CONSOLE_COOKIE, SESSION_COOKIE, isAdminSession, readVisitor } from '@/access/session';
+import { isUnwatchableProgram } from '@/chain/programs';
+import { MAX_WATCHES, MAX_WATCHES_PER_VISITOR } from '@/config';
+import {
+  addWatched,
+  listWatched,
+  refreshClaims,
+  removeWatched,
+  WatchLimitError,
+  type Watcher,
+  type WatchKind,
+} from '@/store/watchlist';
+import {
+  assertAddress,
+  assertOneOf,
+  respond,
+  BadRequestError,
+  ConflictError,
+  NotFoundError,
+} from '@/server/http';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,33 +31,69 @@ const MAX_LABEL = 80;
  * The watchlist the indexer acts on.
  *
  * A browser keeps its own copy in IndexedDB and mirrors it here, because the
- * worker cannot see IndexedDB — it shares nothing with the web app but
- * Postgres. That makes this list the union of what every browser has asked for
- * rather than any one person's, so removing an entry stops the indexer watching
- * it for everyone.
+ * worker cannot see IndexedDB -- it shares nothing with the web app but
+ * Postgres. Each entry remembers which browsers asked for it (by the id in
+ * their console cookie), so removing it in one browser stops the indexer
+ * watching it only once no other browser still wants it.
  */
 export async function GET() {
-  return respond('/api/watchlist', async () => ({ data: await listWatched() }));
+  return respond('/api/watchlist', async () => {
+    const who = await watcher();
+    if (who && 'visitor' in who) await refreshClaims(who.visitor);
+    return { data: await listWatched(who) };
+  });
 }
 
 export async function POST(request: Request) {
   return respond('/api/watchlist', async () => {
+    const who = await requireWatcher();
     const { kind, address, label } = await parseBody(request);
 
-    return await addWatched(kind, address, label);
+    if (kind === 'program' && isUnwatchableProgram(address)) {
+      throw new BadRequestError(
+        'this program owns too much of the chain to follow by itself; watch the apps built on it instead',
+      );
+    }
+
+    try {
+      return await addWatched(who, kind, address, label, {
+        total: MAX_WATCHES,
+        perVisitor: MAX_WATCHES_PER_VISITOR,
+      });
+    } catch (err) {
+      if (err instanceof WatchLimitError) throw new ConflictError(err.message);
+      throw err;
+    }
   });
 }
 
 export async function DELETE(request: Request) {
   return respond('/api/watchlist', async () => {
+    const who = await requireWatcher();
     const { kind, address } = await parseBody(request);
 
-    if (!(await removeWatched(kind, address))) {
-      throw new NotFoundError(`${kind} ${address} is not being watched`);
+    if (!(await removeWatched(who, kind, address))) {
+      throw new NotFoundError(`${kind} ${address} is not being watched by this browser`);
     }
 
     return { kind, address, removed: true };
   });
+}
+
+/** The operator if signed in, else this browser's console id, else nobody. */
+async function watcher(): Promise<Watcher | null> {
+  const jar = await cookies();
+  if (isAdminSession(jar.get(SESSION_COOKIE)?.value)) return { operator: true };
+
+  const visitor = readVisitor(jar.get(CONSOLE_COOKIE)?.value);
+  return visitor ? { visitor } : null;
+}
+
+async function requireWatcher(): Promise<Watcher> {
+  const who = await watcher();
+  // The proxy lets no cookieless request this far; this is the second lock.
+  if (!who) throw new BadRequestError('open the console in a browser to change the watchlist');
+  return who;
 }
 
 async function parseBody(request: Request): Promise<{

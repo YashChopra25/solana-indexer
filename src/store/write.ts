@@ -227,16 +227,74 @@ async function upsertTokens(client: PoolClient, batches: SlotBatch[]): Promise<v
     }
   }
 
-  for (const [mint, info] of byMint) {
+  if (byMint.size === 0) return;
+
+  // One statement for every mint: a round trip per mint was the slowest part
+  // of a busy commit. The map already holds each mint once, which ON CONFLICT
+  // DO UPDATE needs -- it refuses to touch the same row twice in one statement.
+  const entries = [...byMint];
+
+  await client.query(
+    `INSERT INTO tokens (mint, decimals, program_id, first_seen_slot)
+     SELECT * FROM unnest($1::TEXT[], $2::INTEGER[], $3::TEXT[], $4::BIGINT[])
+     ON CONFLICT (mint) DO UPDATE SET
+       decimals        = COALESCE(EXCLUDED.decimals, tokens.decimals),
+       program_id      = COALESCE(EXCLUDED.program_id, tokens.program_id),
+       first_seen_slot = LEAST(tokens.first_seen_slot, EXCLUDED.first_seen_slot),
+       updated_at      = NOW()
+     -- Skips rows with nothing new, so a hot mint is not rewritten every chunk.
+     WHERE (EXCLUDED.decimals IS NOT NULL AND EXCLUDED.decimals IS DISTINCT FROM tokens.decimals)
+        OR (EXCLUDED.program_id IS NOT NULL AND EXCLUDED.program_id IS DISTINCT FROM tokens.program_id)
+        OR EXCLUDED.first_seen_slot < tokens.first_seen_slot`,
+    [
+      entries.map(([mint]) => mint),
+      entries.map(([, info]) => info.decimals),
+      entries.map(([, info]) => info.programId),
+      entries.map(([, info]) => info.slot),
+    ],
+  );
+}
+
+/**
+ * Block metadata that arrived after its slot was already committed -- the slot
+ * was flushed by the lag, before the stream got round to it. The first write
+ * left block_time empty everywhere; this fills it in, so those rows do not stay
+ * timeless forever.
+ */
+async function backfillBlockTimes(client: PoolClient, batches: SlotBatch[]): Promise<void> {
+  const late = batches.filter((b) => toTimestamp(b.block?.blockTime) !== null);
+  if (late.length === 0) return;
+
+  const { rows } = await client.query<{ slot: number; block_time: Date }>(
+    `UPDATE slots s
+     SET block_time   = f.block_time,
+         blockhash    = COALESCE(s.blockhash, f.blockhash),
+         parent_slot  = COALESCE(s.parent_slot, f.parent_slot),
+         block_height = COALESCE(s.block_height, f.block_height)
+     FROM unnest($1::BIGINT[], $2::TIMESTAMPTZ[], $3::TEXT[], $4::BIGINT[], $5::BIGINT[])
+            AS f(slot, block_time, blockhash, parent_slot, block_height)
+     WHERE s.slot = f.slot AND s.block_time IS NULL
+     RETURNING s.slot, s.block_time`,
+    [
+      late.map((b) => b.slot),
+      late.map((b) => toTimestamp(b.block?.blockTime)),
+      late.map((b) => b.block?.blockhash || null),
+      late.map((b) => b.block?.parentSlot ?? null),
+      late.map((b) => b.block?.blockHeight ?? null),
+    ],
+  );
+
+  if (rows.length === 0) return;
+
+  const slots = rows.map((row) => row.slot);
+  const times = rows.map((row) => row.block_time);
+
+  for (const table of ['transactions', 'transfers', 'swaps', 'events']) {
     await client.query(
-      `INSERT INTO tokens (mint, decimals, program_id, first_seen_slot)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (mint) DO UPDATE SET
-         decimals        = COALESCE(EXCLUDED.decimals, tokens.decimals),
-         program_id      = COALESCE(EXCLUDED.program_id, tokens.program_id),
-         first_seen_slot = LEAST(tokens.first_seen_slot, EXCLUDED.first_seen_slot),
-         updated_at      = NOW()`,
-      [mint, info.decimals, info.programId, info.slot],
+      `UPDATE ${table} t SET block_time = f.block_time
+       FROM unnest($1::BIGINT[], $2::TIMESTAMPTZ[]) AS f(slot, block_time)
+       WHERE t.slot = f.slot AND t.block_time IS NULL`,
+      [slots, times],
     );
   }
 }
@@ -276,8 +334,30 @@ async function upsertAccounts(client: PoolClient, batches: SlotBatch[]): Promise
        VALUES ${placeholders}
        ON CONFLICT (address) DO UPDATE SET
          first_seen_slot = LEAST(accounts.first_seen_slot, EXCLUDED.first_seen_slot),
-         last_seen_slot  = GREATEST(accounts.last_seen_slot, EXCLUDED.last_seen_slot)`,
+         last_seen_slot  = GREATEST(accounts.last_seen_slot, EXCLUDED.last_seen_slot)
+       WHERE EXCLUDED.last_seen_slot > accounts.last_seen_slot
+          OR EXCLUDED.first_seen_slot < accounts.first_seen_slot`,
       chunk.flat(),
+    );
+  }
+}
+
+/**
+ * Stragglers: transactions written under a slot without its block metadata,
+ * because the block had already been committed with the rest of the slot. The
+ * slot row knows the time, so the new rows take it from there.
+ */
+async function fillTimesFromSlots(client: PoolClient, batches: SlotBatch[]): Promise<void> {
+  const slots = batches.filter((b) => !b.block && b.transactions.length > 0).map((b) => b.slot);
+  if (slots.length === 0) return;
+
+  for (const table of ['transactions', 'transfers', 'swaps', 'events']) {
+    await client.query(
+      `UPDATE ${table} t SET block_time = s.block_time
+       FROM slots s
+       WHERE s.slot = ANY($1::BIGINT[]) AND t.slot = s.slot
+         AND t.block_time IS NULL AND s.block_time IS NOT NULL`,
+      [slots],
     );
   }
 }
@@ -287,25 +367,24 @@ async function upsertAccounts(client: PoolClient, batches: SlotBatch[]): Promise
  *
  * This is the statement that makes a restart safe: it runs in the same
  * transaction as the rows above, so the checkpoint can never point past data
- * that was not committed.
+ * that was not committed. The caller holds it below any slot still buffered.
  *
- * GREATEST stops an out-of-order flush from moving it backwards, and
- * `slots_processed` counts only slots ahead of where the checkpoint already
- * was -- so replaying an indexed slot leaves every number unchanged.
+ * GREATEST stops an out-of-order flush from moving it backwards, and every
+ * count is of rows that were new -- so replaying an indexed slot leaves every
+ * number unchanged.
  */
 async function advanceCheckpoint(
   client: PoolClient,
-  slots: number[],
+  checkpoint: number,
   blockTime: Date | null,
+  newSlots: number,
   counts: WriteCounts,
 ): Promise<void> {
   await client.query(
     `UPDATE indexer_state
      SET last_processed_slot = GREATEST(last_processed_slot, $1),
          last_block_time     = COALESCE($2, last_block_time),
-         slots_processed     = slots_processed + (
-           SELECT count(*) FROM unnest($3::BIGINT[]) AS s WHERE s > last_processed_slot
-         ),
+         slots_processed     = slots_processed + $3,
          transactions_count  = transactions_count + $4,
          transfers_count     = transfers_count + $5,
          swaps_count         = swaps_count + $6,
@@ -313,9 +392,9 @@ async function advanceCheckpoint(
          updated_at          = NOW()
      WHERE id = 'default'`,
     [
-      Math.max(...slots),
+      checkpoint,
       blockTime,
-      slots,
+      newSlots,
       counts.transactions,
       counts.transfers,
       counts.swaps,
@@ -340,11 +419,12 @@ async function advanceCheckpoint(
 export async function persistSlots(
   client: PoolClient,
   batches: SlotBatch[],
+  checkpoint = batches.length > 0 ? batches[batches.length - 1].slot : 0,
 ): Promise<WriteCounts> {
   const empty: WriteCounts = { transactions: 0, transfers: 0, swaps: 0, events: 0 };
   if (batches.length === 0) return empty;
 
-  await insertMany(
+  const newSlots = await insertMany(
     client,
     'slots',
     [
@@ -359,6 +439,8 @@ export async function persistSlots(
     batches.map(slotRow),
     'slot',
   );
+
+  await backfillBlockTimes(client, batches);
 
   // block_time belongs to the slot, so rows are built per slot and only then
   // concatenated into one statement per table.
@@ -421,18 +503,14 @@ export async function persistSlots(
     'signature, invocation_index',
   );
 
+  await fillTimesFromSlots(client, batches);
   await upsertTokens(client, batches);
   await upsertAccounts(client, batches);
 
   const counts: WriteCounts = { transactions, transfers, swaps, events };
   const newest = batches[batches.length - 1];
 
-  await advanceCheckpoint(
-    client,
-    batches.map((b) => b.slot),
-    timeOf(newest),
-    counts,
-  );
+  await advanceCheckpoint(client, checkpoint, timeOf(newest), newSlots, counts);
 
   return counts;
 }

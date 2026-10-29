@@ -1,3 +1,4 @@
+import { shared } from '@/server/cache';
 import { findToken } from '@/store/read';
 import { NotFoundError, assertAddress, respond } from '@/server/http';
 
@@ -7,7 +8,9 @@ export const dynamic = 'force-dynamic';
 export async function GET(_request: Request, ctx: { params: Promise<{ mint: string }> }) {
   const { mint } = await ctx.params;
 
-  return respond('/api/tokens/[mint]', async () => {
+  // Shared for half a minute: the counts behind it read every row a popular
+  // mint has, and they barely move in that time.
+  return respond('/api/tokens/[mint]', () => shared(`token:${mint}`, 30_000, async () => {
     assertAddress(mint, 'mint');
 
     const token = await findToken(mint);
@@ -23,5 +26,5 @@ export async function GET(_request: Request, ctx: { params: Promise<{ mint: stri
       swapCount: Number(token.swap_count ?? 0),
       updatedAt: token.updated_at ? new Date(token.updated_at).toISOString() : null,
     };
-  });
+  }));
 }

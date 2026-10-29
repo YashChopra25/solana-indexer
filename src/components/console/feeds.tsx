@@ -113,7 +113,7 @@ export function TransferFeed({
         error={error}
         loading={loading}
         empty={transfers.length === 0}
-        emptyMessage="No payments recorded yet. Start the indexer with `npm run indexer` and they will stream in here."
+        emptyMessage="No payments recorded yet. They will stream in here as soon as the indexer sees them."
       />
     </>
   );

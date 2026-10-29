@@ -57,6 +57,15 @@ export async function countRequest(customerId: number, quota: number): Promise<n
   return rows[0]?.requests ?? null;
 }
 
+/** Hands back one request counted this month, for an answer that was an error. */
+export async function refundRequest(customerId: number): Promise<void> {
+  await getPool().query(
+    `UPDATE api_usage SET requests = requests - 1
+     WHERE customer_id = $1 AND month = ${THIS_MONTH} AND requests > 0`,
+    [customerId],
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /* Admin                                                               */
 /* ------------------------------------------------------------------ */

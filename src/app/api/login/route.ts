@@ -1,5 +1,6 @@
 import { SESSION_COOKIE, SESSION_TTL_SECONDS, isHttps, safeEqual, signSession } from '@/access/session';
 import { ADMIN_PASSWORD } from '@/config';
+import { safeNext } from '@/access/redirect';
 
 export const dynamic = 'force-dynamic';
 
@@ -38,9 +39,4 @@ export async function POST(request: Request) {
  */
 function redirect(path: string, headers: Record<string, string> = {}): Response {
   return new Response(null, { status: 303, headers: { Location: path, ...headers } });
-}
-
-/** Only a path on this site, so the form cannot be used to bounce people elsewhere. */
-function safeNext(next: string): string {
-  return next.startsWith('/') && !next.startsWith('//') ? next : '/';
 }

@@ -21,6 +21,11 @@ describe('parsePage', () => {
     expect(page('limit=10&offset=40')).toEqual({ limit: 10, offset: 40 });
   });
 
+  it('refuses an offset deep enough to be expensive', () => {
+    expect(page('offset=10000').offset).toBe(10_000);
+    expect(() => page('offset=10001')).toThrow(/at most 10000/);
+  });
+
   it('clamps limit to the maximum', () => {
     expect(page('limit=5000').limit).toBe(100);
   });

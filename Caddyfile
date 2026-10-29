@@ -1,0 +1,24 @@
+# The only thing reachable from the internet in production.
+#
+# With SITE_ADDRESS set to a domain whose DNS points at this server, Caddy
+# fetches and renews a TLS certificate by itself and redirects http to https.
+# Left at the default (:80) it serves plain http -- fine for a first look,
+# never for real customers: the admin password would cross the network in
+# the clear.
+{$SITE_ADDRESS::80} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+	}
+
+	# Caddy replaces X-Forwarded-For with the address it saw, so the app's
+	# rate limits key on the real client and cannot be fooled by the header.
+	reverse_proxy web:8003
+
+	log {
+		output stdout
+		format json
+	}
+}

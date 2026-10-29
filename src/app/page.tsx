@@ -14,12 +14,16 @@ import type { IndexerStatus, Paginated, Transfer } from '@/lib/api-types';
  * glossary at the bottom is there for anyone who has never used a blockchain.
  */
 export default function ActivityPage() {
-  const status = usePoll<IndexerStatus>('/api/status', 2_000);
-  const transfers = usePoll<Paginated<Transfer>>('/api/transfers?limit=20', 3_000);
+  const status = usePoll<IndexerStatus>('/api/status', 4_000);
+  const transfers = usePoll<Paginated<Transfer>>('/api/transfers?limit=20', 5_000);
 
   const indexer = status.data?.indexer;
   const totals = status.data?.totals;
-  const health = classifyHealth(indexer?.lagSeconds ?? null, indexer?.slotsProcessed ?? 0);
+  // Frozen numbers from before a failed read must not keep the dot "Live".
+  const health =
+    status.error && (status.stale || !status.data)
+      ? 'stalled'
+      : classifyHealth(indexer?.lagSeconds ?? null, indexer?.slotsProcessed ?? 0);
 
   const behind = Math.max(
     0,
@@ -37,7 +41,7 @@ export default function ActivityPage() {
         }
       />
 
-      <main className="mx-auto w-full max-w-7xl">
+      <main id="main" className="mx-auto w-full max-w-7xl">
         <PageHead
           eyebrow="Solana, as it happens"
           value={indexer?.lastProcessedSlot ? `${formatLag(indexer.lagSeconds)} behind` : 'Waiting…'}
@@ -45,7 +49,7 @@ export default function ActivityPage() {
           note={
             indexer?.lastProcessedSlot
               ? `latest block #${indexer.lastProcessedSlot.toLocaleString()} · ≈ ${behind.toLocaleString()} blocks to catch up`
-              : 'no data yet — start the indexer with `npm run indexer`'
+              : 'no data yet — waiting for the first block'
           }
           explain="This page reads the Solana blockchain live and turns raw blocks into things people recognise: who paid whom, who traded what, and which apps were used. The smaller the delay above, the closer to real time you are."
         />

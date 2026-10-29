@@ -6,6 +6,7 @@ import {
   findProgramEventTypes,
 } from '@/store/read';
 import { programLabel } from '@/chain/programs';
+import { shared } from '@/server/cache';
 import { NotFoundError, assertAddress, paginate, parsePage, respond } from '@/server/http';
 import { serializeAccountUpdate, serializeEvent, serializeInvocation } from '@/server/serialize';
 
@@ -30,9 +31,13 @@ export async function GET(request: Request, ctx: { params: Promise<{ programId: 
 
     const page = parsePage(new URL(request.url).searchParams);
 
-    const [summary, eventTypes, eventRows, invocationRows, accountRows] = await Promise.all([
-      findProgram(programId),
-      findProgramEventTypes(programId, EVENT_TYPE_LIMIT),
+    // The summary counts every row a program has, which on a busy program is
+    // the expensive part. It changes slowly, so it is shared for a while.
+    const summaryKey = `program:${programId}`;
+    const [[summary, eventTypes], eventRows, invocationRows, accountRows] = await Promise.all([
+      shared(summaryKey, 60_000, () =>
+        Promise.all([findProgram(programId), findProgramEventTypes(programId, EVENT_TYPE_LIMIT)]),
+      ),
       findEvents({ programId }, page),
       findInvocationsByProgram(programId, page),
       findAccountUpdates(programId, page),

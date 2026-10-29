@@ -31,7 +31,7 @@ import type { WatchEntry, WatchKind } from '@/lib/api-types';
  */
 export default function WatchingPage() {
   const watchlist = useWatchlist();
-  const registry = usePoll<{ data: WatchEntry[] }>('/api/watchlist', 5_000);
+  const registry = usePoll<{ data: WatchEntry[] }>('/api/watchlist', 10_000);
 
   const onServer = new Set(
     (registry.data?.data ?? []).map((entry) => `${entry.kind}:${entry.address}`),
@@ -44,7 +44,8 @@ export default function WatchingPage() {
     (entry) => !local.has(`${entry.kind}:${entry.address}`),
   );
 
-  const health = watchlist.error || (registry.error && !registry.data) ? 'stalled' : 'live';
+  // About reaching the indexer's list; a refused change is reported where it happened.
+  const health = registry.error && !registry.data ? 'stalled' : registry.data ? 'live' : 'idle';
 
   return (
     <>
@@ -53,7 +54,7 @@ export default function WatchingPage() {
         detail={`${watchlist.items.length} saved here · ${onServer.size} followed by the indexer`}
       />
 
-      <main className="mx-auto w-full max-w-7xl">
+      <main id="main" className="mx-auto w-full max-w-7xl">
         <PageHead
           eyebrow="Your watchlist"
           value={watchlist.items.length.toLocaleString()}
@@ -105,8 +106,16 @@ export default function WatchingPage() {
             </Table>
           )}
 
+          {/* A failed change, not a failed read: said on its own rather than as a
+              connection problem. */}
+          {watchlist.error && (
+            <p role="alert" className="mt-3 text-xs" style={{ color: 'var(--signal)' }}>
+              {watchlist.error}
+            </p>
+          )}
+
           <FeedState
-            error={watchlist.error}
+            error={null}
             loading={watchlist.loading}
             empty={watchlist.items.length === 0}
             emptyMessage={

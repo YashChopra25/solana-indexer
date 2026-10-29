@@ -26,8 +26,11 @@ const PAGES = [
   { href: '/swaps', label: 'Trades' },
   { href: '/events', label: 'App events' },
   { href: '/watching', label: 'Watchlist' },
-  { href: '/admin', label: 'Customers' },
+  { href: '/docs', label: 'API docs' },
 ];
+
+/** Only shown once you are on /admin: visitors have no use for a password wall. */
+const ADMIN_PAGE = { href: '/admin', label: 'Customers' };
 
 export function StatusRail({ health, detail }: { health: Health; detail: string }) {
   const tone = toneOf(health);
@@ -72,7 +75,7 @@ export function StatusRail({ health, detail }: { health: Health; detail: string 
         </span>
 
         <nav className="no-scrollbar -mx-1 flex w-full gap-1 overflow-x-auto text-sm sm:mx-0 sm:w-auto">
-          {PAGES.map((page) => {
+          {(pathname.startsWith('/admin') ? [...PAGES, ADMIN_PAGE] : PAGES).map((page) => {
             const current = pathname === page.href;
 
             return (
@@ -152,9 +155,10 @@ export function PageHead({
 }) {
   return (
     <section className="px-4 pb-6 pt-10 sm:px-8 sm:pb-8 sm:pt-14">
-      <p className="text-xs uppercase tracking-[0.2em]" style={{ color: 'var(--dim)' }}>
+      {/* The eyebrow names the page, so it is the heading; the big value is data. */}
+      <h1 className="text-xs font-normal uppercase tracking-[0.2em]" style={{ color: 'var(--dim)' }}>
         {eyebrow}
-      </p>
+      </h1>
 
       <p
         className={`tnum font-display mt-3 break-all text-5xl font-700 leading-none tracking-tight sm:text-7xl ${tone ? '' : 'grad-text'}`}
@@ -396,7 +400,7 @@ export function FeedState({
 }) {
   if (error && !empty) {
     return (
-      <p className="mt-3 text-xs" style={{ color: 'var(--signal)' }}>
+      <p role="status" className="mt-3 text-xs" style={{ color: 'var(--signal)' }}>
         Connection hiccup — showing the last data received and retrying. ({error})
       </p>
     );
@@ -404,7 +408,7 @@ export function FeedState({
 
   if (error) {
     return (
-      <div className="panel mt-4 px-5 py-6 text-sm leading-relaxed" style={{ color: 'var(--signal)' }}>
+      <div role="alert" className="panel mt-4 px-5 py-6 text-sm leading-relaxed" style={{ color: 'var(--signal)' }}>
         {error}
       </div>
     );

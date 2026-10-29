@@ -546,11 +546,15 @@ export async function findActivity(
   const branches = activityBranches(kinds);
   if (branches.length === 0) return [];
 
+  // Each branch is cut to the most it could contribute to this page before the
+  // union, so a busy wallet sorts a few hundred rows, not its whole history.
   const { rows } = await getPool().query<ActivityRow>(
-    `SELECT * FROM (${branches.join(' UNION ALL ')}) AS activity
+    `SELECT * FROM (${branches
+      .map((b) => `(${b}\n      ORDER BY slot DESC, signature LIMIT $4)`)
+      .join(' UNION ALL ')}) AS activity
      ORDER BY slot DESC, signature
      LIMIT $2 OFFSET $3`,
-    [address, page.limit + 1, page.offset],
+    [address, page.limit + 1, page.offset, page.limit + page.offset + 1],
   );
 
   return rows;
@@ -618,16 +622,33 @@ export async function readIndexerState() {
   return rows[0] ?? null;
 }
 
-/** The row counts on the dashboard. */
+/**
+ * The row counts on the dashboard.
+ *
+ * Polled every couple of seconds by every open console, so it must not scan
+ * anything. The worker keeps exact counters for what it writes in
+ * `indexer_state`; accounts and tokens are upserted rather than appended, so
+ * they use the planner's estimate once a table is big enough for an exact
+ * count to cost something, and a real COUNT below that.
+ */
 export async function readTotals() {
   const { rows } = await getPool().query(
-    `SELECT (SELECT COUNT(*) FROM slots)        AS slots,
-            (SELECT COUNT(*) FROM transactions) AS transactions,
-            (SELECT COUNT(*) FROM transfers)    AS transfers,
-            (SELECT COUNT(*) FROM swaps)        AS swaps,
-            (SELECT COUNT(*) FROM events)       AS events,
-            (SELECT COUNT(*) FROM accounts)     AS accounts,
-            (SELECT COUNT(*) FROM tokens)       AS tokens`,
+    `WITH estimate AS (
+       SELECT relname, reltuples::BIGINT AS rows FROM pg_class
+       WHERE relname IN ('accounts', 'tokens') AND relkind = 'r'
+     )
+     SELECT s.slots_processed    AS slots,
+            s.transactions_count AS transactions,
+            s.transfers_count    AS transfers,
+            s.swaps_count        AS swaps,
+            s.events_count       AS events,
+            CASE WHEN (SELECT rows FROM estimate WHERE relname = 'accounts') >= 100000
+                 THEN (SELECT rows FROM estimate WHERE relname = 'accounts')
+                 ELSE (SELECT COUNT(*) FROM accounts) END AS accounts,
+            CASE WHEN (SELECT rows FROM estimate WHERE relname = 'tokens') >= 100000
+                 THEN (SELECT rows FROM estimate WHERE relname = 'tokens')
+                 ELSE (SELECT COUNT(*) FROM tokens) END AS tokens
+     FROM indexer_state s WHERE s.id = 'default'`,
   );
 
   return rows[0] ?? null;

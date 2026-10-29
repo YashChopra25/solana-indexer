@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { checkKey, generateKey, hashKey, readKey, type KeyRecord } from '../../src/access/keys';
 import { readAmount, readCurrency, readEmail, readMonths, readPlan } from '../../src/access/input';
-import { isHttps, signSession, verifySession } from '../../src/access/session';
+import {
+  isHttps,
+  newVisitorCookie,
+  readVisitor,
+  safeEqual,
+  signSession,
+  verifySession,
+} from '../../src/access/session';
 
 const NOW = new Date('2026-10-07T12:00:00Z');
 
@@ -83,6 +90,29 @@ describe('admin session', () => {
     const later = now + 8 * 24 * 60 * 60 * 1000;
     expect(verifySession('pw', signSession('pw', now), later)).toBe(false);
     expect(verifySession('pw', undefined, now)).toBe(false);
+  });
+});
+
+describe('console cookie', () => {
+  it('reads back the id of a cookie this server made', () => {
+    const cookie = newVisitorCookie();
+    expect(readVisitor(cookie)).toBe(cookie.split('.')[0]);
+  });
+
+  it('refuses a made-up or tampered value', () => {
+    const [id, signature] = newVisitorCookie().split('.');
+
+    expect(readVisitor('A'.repeat(22))).toBeNull();
+    expect(readVisitor(`${'A'.repeat(22)}.${signature}`)).toBeNull();
+    expect(readVisitor(`${id}.${signature.slice(0, -1)}x`)).toBeNull();
+    expect(readVisitor(undefined)).toBeNull();
+  });
+});
+
+describe('safeEqual', () => {
+  it('compares values of any length', () => {
+    expect(safeEqual('secret', 'secret')).toBe(true);
+    expect(safeEqual('secret', 'secret-but-longer')).toBe(false);
   });
 });
 

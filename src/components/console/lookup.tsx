@@ -134,7 +134,9 @@ export function Lookup() {
 }
 
 function TransactionResult({ signature }: { signature: string }) {
-  const detail = usePoll<TransactionDetail>(`/api/transactions/${signature}`, 10_000);
+  // A transaction never changes once indexed; this only asks again in case it
+  // had not been indexed yet.
+  const detail = usePoll<TransactionDetail>(`/api/transactions/${signature}`, 30_000);
   const tx = detail.data;
 
   if (!tx) {

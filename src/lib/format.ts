@@ -119,7 +119,8 @@ export function classifyHealth(lagSeconds: number | null, slotsProcessed: number
  * happened. Slot numbers stay on screen beside it for anyone who wants them.
  */
 export function timeAgo(iso: string | null, now = Date.now()): string {
-  if (!iso) return 'just now';
+  // No block time means the chain has not said yet, not that it just happened.
+  if (!iso) return 'time unknown';
 
   const seconds = Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000));
   if (seconds < 5) return 'just now';

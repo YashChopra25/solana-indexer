@@ -10,6 +10,8 @@ import { WatchStatus } from '@/components/console/watch-status';
 import { usePoll } from '@/hooks/use-poll';
 import { useWatchEntry, useWatchlist } from '@/hooks/use-watchlist';
 import { truncate } from '@/lib/format';
+import { isAddress } from '@/lib/address';
+import { InvalidAddress } from '@/components/console/invalid-address';
 import type { AccountUpdate, Activity, ActivityKind, WalletPage } from '@/lib/api-types';
 
 /**
@@ -31,12 +33,17 @@ const FILTERS: { label: string; kinds: ActivityKind[] | null }[] = [
 export default function WalletPageView({ params }: { params: Promise<{ address: string }> }) {
   const { address } = use(params);
 
+  if (!isAddress(address)) return <InvalidAddress what="wallet" value={decodeURIComponent(address)} />;
+  return <Wallet address={address} />;
+}
+
+function Wallet({ address }: { address: string }) {
   const [filter, setFilter] = useState(0);
   const kinds = FILTERS[filter].kinds;
 
   const query = kinds ? `?limit=50&kind=${kinds.join(',')}` : '?limit=50';
-  const activity = usePoll<WalletPage<Activity>>(`/api/wallets/${address}/activity${query}`, 4_000);
-  const accounts = usePoll<WalletPage<AccountUpdate>>(`/api/accounts/${address}?limit=25`, 4_000);
+  const activity = usePoll<WalletPage<Activity>>(`/api/wallets/${address}/activity${query}`, 6_000);
+  const accounts = usePoll<WalletPage<AccountUpdate>>(`/api/accounts/${address}?limit=25`, 10_000);
   const watchlist = useWatchlist();
   // The indexer's own view of this watch, which is what the status and the
   // account feed describe -- not this browser's list.
@@ -44,7 +51,7 @@ export default function WalletPageView({ params }: { params: Promise<{ address: 
 
   const rows = activity.data?.data ?? [];
   // A dropped request with rows still on screen is a hiccup, not an outage.
-  const health = activity.data ? 'live' : activity.error ? 'stalled' : 'idle';
+  const health = activity.error ? 'stalled' : activity.data ? 'live' : 'idle';
 
   const count = (kind: ActivityKind) => rows.filter((row) => row.kind === kind).length;
 
@@ -52,7 +59,7 @@ export default function WalletPageView({ params }: { params: Promise<{ address: 
     <>
       <StatusRail health={health} detail={`${rows.length} recent records`} />
 
-      <main className="mx-auto w-full max-w-7xl">
+      <main id="main" className="mx-auto w-full max-w-7xl">
         <PageHead
           eyebrow="Wallet"
           value={truncate(address, 6, 6)}

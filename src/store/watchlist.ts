@@ -1,4 +1,4 @@
-import { getPool } from './pool';
+import { getPool, withTransaction } from './pool';
 import type { PoolClient } from './pool';
 
 /**
@@ -20,6 +20,10 @@ interface WatchEntry {
   matchedCount: number;
   lastMatchedSlot: number | null;
   lastMatchedAt: string | null;
+  /** How many browsers (or the operator) want this watch. */
+  watchers: number;
+  /** Whether the browser asking is one of them. */
+  mine: boolean;
 }
 
 interface WatchRow {
@@ -30,6 +34,8 @@ interface WatchRow {
   matched_count: string | number;
   last_matched_slot: number | null;
   last_matched_at: Date | null;
+  watchers: string | number;
+  mine: boolean;
 }
 
 function toEntry(row: WatchRow): WatchEntry {
@@ -41,48 +47,166 @@ function toEntry(row: WatchRow): WatchEntry {
     matchedCount: Number(row.matched_count ?? 0),
     lastMatchedSlot: row.last_matched_slot,
     lastMatchedAt: row.last_matched_at ? new Date(row.last_matched_at).toISOString() : null,
+    watchers: Number(row.watchers ?? 0),
+    mine: Boolean(row.mine),
   };
 }
 
-export async function listWatched(): Promise<WatchEntry[]> {
+/** Who is asking: a browser's console id, or the signed-in operator. */
+export type Watcher = { visitor: string } | { operator: true };
+
+/** The id stored in watch_owners for this watcher. */
+function ownerId(watcher: Watcher): string {
+  return 'visitor' in watcher ? watcher.visitor : 'operator';
+}
+
+/** Thrown when an add would go past a cap; the message is fit to show as-is. */
+export class WatchLimitError extends Error {}
+
+const ENTRY_COLUMNS = `w.kind, w.address, w.label, w.added_at, w.matched_count,
+  w.last_matched_slot, w.last_matched_at,
+  (SELECT COUNT(*) FROM watch_owners o WHERE o.kind = w.kind AND o.address = w.address) AS watchers,
+  EXISTS (SELECT 1 FROM watch_owners o
+          WHERE o.kind = w.kind AND o.address = w.address AND o.visitor = $1) AS mine`;
+
+export async function listWatched(watcher: Watcher | null): Promise<WatchEntry[]> {
   const { rows } = await getPool().query<WatchRow>(
-    `SELECT kind, address, label, added_at, matched_count, last_matched_slot, last_matched_at
-     FROM watchlist ORDER BY added_at DESC`,
+    `SELECT ${ENTRY_COLUMNS} FROM watchlist w ORDER BY w.added_at DESC`,
+    [watcher ? ownerId(watcher) : null],
   );
 
   return rows.map(toEntry);
 }
 
 /**
- * Adds an entry, or updates its label if it is already there.
+ * Adds an entry for this watcher, or updates its label if it is already there.
  *
- * Two browsers watching the same program is one row, not two: the worker only
- * needs to know *that* something is watched, not how many people want it.
+ * Two browsers watching the same program is one watch with two owners: the
+ * worker only needs to know *that* something is watched. Every watch costs a
+ * stream subscription, so a browser may hold at most `perVisitor` and the
+ * whole list at most `total`; the operator is exempt from the first.
  */
 export async function addWatched(
+  watcher: Watcher,
   kind: WatchKind,
   address: string,
   label: string | null,
+  caps: { total: number; perVisitor: number },
 ): Promise<WatchEntry> {
-  const { rows } = await getPool().query<WatchRow>(
+  return withTransaction(async (client) => {
+    // Serialises adds, so two racing for the last free place cannot both win.
+    await client.query('SELECT pg_advisory_xact_lock(472019332)');
+    return addWatchedLocked(client, watcher, kind, address, label, caps, true);
+  });
+}
+
+async function addWatchedLocked(
+  client: PoolClient,
+  watcher: Watcher,
+  kind: WatchKind,
+  address: string,
+  label: string | null,
+  caps: { total: number; perVisitor: number },
+  mayPrune: boolean,
+): Promise<WatchEntry> {
+  const owner = ownerId(watcher);
+
+  const { rows: counts } = await client.query<{ exists: boolean; total: string; mine: string }>(
+    `SELECT EXISTS (SELECT 1 FROM watchlist WHERE kind = $1 AND address = $2) AS exists,
+            (SELECT COUNT(*) FROM watchlist) AS total,
+            (SELECT COUNT(*) FROM watch_owners WHERE visitor = $3) AS mine`,
+    [kind, address, owner],
+  );
+  const { exists, total, mine } = counts[0];
+
+  if (!exists && Number(total) >= caps.total) {
+    // Stale claims are only cleared when the list is full, which is the only
+    // time they are in anyone's way.
+    if (mayPrune && (await pruneStaleClaims(client)) > 0) {
+      return addWatchedLocked(client, watcher, kind, address, label, caps, false);
+    }
+    throw new WatchLimitError(`the watchlist is full (${caps.total} entries); try again once some are removed`);
+  }
+  if ('visitor' in watcher && Number(mine) >= caps.perVisitor) {
+    throw new WatchLimitError(`you can watch up to ${caps.perVisitor} addresses; remove one first`);
+  }
+
+  await client.query(
     `INSERT INTO watchlist (kind, address, label)
      VALUES ($1, $2, $3)
-     ON CONFLICT (kind, address) DO UPDATE SET label = COALESCE(EXCLUDED.label, watchlist.label)
-     RETURNING kind, address, label, added_at, matched_count, last_matched_slot, last_matched_at`,
+     ON CONFLICT (kind, address) DO UPDATE SET label = COALESCE(EXCLUDED.label, watchlist.label)`,
     [kind, address, label],
   );
+  await client.query(
+    `INSERT INTO watch_owners (kind, address, visitor) VALUES ($1, $2, $3)
+     ON CONFLICT (kind, address, visitor) DO UPDATE SET last_seen_at = NOW()`,
+    [kind, address, owner],
+  );
 
+  const { rows } = await client.query<WatchRow>(
+    `SELECT ${ENTRY_COLUMNS} FROM watchlist w WHERE w.kind = $2 AND w.address = $3`,
+    [owner, kind, address],
+  );
   return toEntry(rows[0]);
 }
 
-/** Returns whether a row was actually removed. */
-export async function removeWatched(kind: WatchKind, address: string): Promise<boolean> {
-  const { rowCount } = await getPool().query(
-    'DELETE FROM watchlist WHERE kind = $1 AND address = $2',
-    [kind, address],
-  );
+/** How long a browser's claim lasts without that browser coming back. */
+const CLAIM_TTL = '30 days';
 
-  return (rowCount ?? 0) > 0;
+/** Drops expired visitor claims and the watches nobody claims any more; returns watches freed. */
+async function pruneStaleClaims(client: PoolClient): Promise<number> {
+  await client.query(
+    `DELETE FROM watch_owners WHERE visitor <> 'operator' AND last_seen_at < NOW() - INTERVAL '${CLAIM_TTL}'`,
+  );
+  const { rowCount } = await client.query(
+    `DELETE FROM watchlist w
+     WHERE NOT EXISTS (SELECT 1 FROM watch_owners o WHERE o.kind = w.kind AND o.address = w.address)`,
+  );
+  return rowCount ?? 0;
+}
+
+/**
+ * Marks this browser's claims as still wanted. Called when it reads the list,
+ * at most once a day per claim, so polling does not turn into writes.
+ */
+export async function refreshClaims(visitor: string): Promise<void> {
+  await getPool().query(
+    `UPDATE watch_owners SET last_seen_at = NOW()
+     WHERE visitor = $1 AND last_seen_at < NOW() - INTERVAL '1 day'`,
+    [visitor],
+  );
+}
+
+/**
+ * Drops this watcher's claim on a watch, and the watch itself once nobody
+ * wants it. The operator removes the watch outright, whoever added it.
+ *
+ * Returns whether there was anything of theirs to remove.
+ */
+export async function removeWatched(watcher: Watcher, kind: WatchKind, address: string): Promise<boolean> {
+  if ('operator' in watcher) {
+    const { rowCount } = await getPool().query(
+      'DELETE FROM watchlist WHERE kind = $1 AND address = $2',
+      [kind, address],
+    );
+    return (rowCount ?? 0) > 0;
+  }
+
+  return withTransaction(async (client) => {
+    const { rowCount } = await client.query(
+      'DELETE FROM watch_owners WHERE kind = $1 AND address = $2 AND visitor = $3',
+      [kind, address, watcher.visitor],
+    );
+    if (!rowCount) return false;
+
+    await client.query(
+      `DELETE FROM watchlist w
+       WHERE w.kind = $1 AND w.address = $2
+         AND NOT EXISTS (SELECT 1 FROM watch_owners o WHERE o.kind = w.kind AND o.address = w.address)`,
+      [kind, address],
+    );
+    return true;
+  });
 }
 
 export interface WatchTarget {

@@ -13,10 +13,14 @@ import type { IndexerStatus, Paginated, Swap } from '@/lib/api-types';
  */
 export default function SwapsPage() {
   const status = usePoll<IndexerStatus>('/api/status', 5_000);
-  const swaps = usePoll<Paginated<Swap>>('/api/swaps?limit=30', 3_000);
+  const swaps = usePoll<Paginated<Swap>>('/api/swaps?limit=30', 5_000);
 
   const indexer = status.data?.indexer;
-  const health = classifyHealth(indexer?.lagSeconds ?? null, indexer?.slotsProcessed ?? 0);
+  // Frozen numbers from before a failed read must not keep the dot "Live".
+  const health =
+    status.error && (status.stale || !status.data)
+      ? 'stalled'
+      : classifyHealth(indexer?.lagSeconds ?? null, indexer?.slotsProcessed ?? 0);
 
   return (
     <>
@@ -25,7 +29,7 @@ export default function SwapsPage() {
         detail={`${formatCount(status.data?.totals.swaps)} trades found`}
       />
 
-      <main className="mx-auto w-full max-w-7xl">
+      <main id="main" className="mx-auto w-full max-w-7xl">
         <PageHead
           eyebrow="Trades detected"
           value={formatCount(status.data?.totals.swaps)}

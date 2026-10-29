@@ -59,11 +59,10 @@ export function WatchButton({
         {busy ? 'Saving…' : watched ? 'Stop watching' : '★ Watch'}
       </button>
 
-      {watchlist.error && (
-        <span className="max-w-sm text-xs" style={{ color: 'var(--signal)' }}>
-          {watchlist.error}
-        </span>
-      )}
+      {/* Always mounted, so a screen reader hears the message when it appears. */}
+      <span role="status" className="max-w-sm text-xs" style={{ color: 'var(--signal)' }}>
+        {watchlist.error}
+      </span>
     </div>
   );
 }

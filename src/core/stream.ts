@@ -1,5 +1,5 @@
 import { CommitmentLevel, subscribe } from 'helius-laserstream';
-import { COMMITMENT, LASERSTREAM_ENDPOINT, heliusApiKey } from '../config';
+import { LASERSTREAM_ENDPOINT, heliusApiKey, streamCommitment } from '../config';
 import { createLogger, errorMessage } from '../lib/logger';
 import { subscriptionSet } from './subscription';
 import type { WatchTarget } from '../store/watchlist';
@@ -36,7 +36,8 @@ interface Subscription {
    * program takes effect on the next slot rather than costing a reconnect — and
    * a reconnect would mean a replay, a gap, or both.
    */
-  update(watched: WatchTarget[]): void;
+  /** Resolves true once the stream took the new filter, false if it refused it. */
+  update(watched: WatchTarget[]): Promise<boolean>;
   /** Resolves when the signal aborts; rejects if the stream fails. */
   closed: Promise<void>;
 }
@@ -134,7 +135,7 @@ function buildRequest(watched: WatchTarget[], baseline: string[], fromSlot: numb
     transactionsStatus: {},
     blocks: {},
     entry: {},
-    commitment: COMMITMENT_LEVEL[COMMITMENT],
+    commitment: COMMITMENT_LEVEL[streamCommitment()],
     ...(fromSlot !== null ? { fromSlot } : {}),
   };
 }
@@ -183,9 +184,12 @@ export async function openStream(
     try {
       await Promise.race([
         streamFailed,
-        new Promise<void>((resolve) =>
-          signal.addEventListener('abort', () => resolve(), { once: true }),
-        ),
+        new Promise<void>((resolve) => {
+          // Stopped while the connection was still opening: the event has
+          // already fired and would never be heard.
+          if (signal.aborted) return resolve();
+          signal.addEventListener('abort', () => resolve(), { once: true });
+        }),
       ]);
     } finally {
       handle.cancel();
@@ -193,12 +197,16 @@ export async function openStream(
   })();
 
   return {
-    update(next: WatchTarget[]) {
+    async update(next: WatchTarget[]) {
       // A rejected rewrite must not take the worker down: the stream carries on
-      // with the filter it already had, and the next reconcile tries again.
-      void Promise.resolve(handle.write(buildRequest(next, baseline, null))).catch((err) =>
-        log.warn('could not update subscription', { error: errorMessage(err) }),
-      );
+      // with the filter it already had, and the caller tries again later.
+      try {
+        await handle.write(buildRequest(next, baseline, null));
+        return true;
+      } catch (err) {
+        log.warn('could not update subscription', { error: errorMessage(err) });
+        return false;
+      }
     },
     closed,
   };

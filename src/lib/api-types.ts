@@ -155,6 +155,10 @@ export interface WatchEntry {
   matchedCount: number;
   lastMatchedSlot: number | null;
   lastMatchedAt: string | null;
+  /** How many browsers (or the operator) want this watch. */
+  watchers: number;
+  /** Whether this browser is one of them. */
+  mine: boolean;
 }
 
 export interface ProgramEventType {

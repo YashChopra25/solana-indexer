@@ -230,7 +230,7 @@ export const ENDPOINTS: Endpoint[] = [
       'Anchor events (emit! and emit_cpi!), newest first. The payload is returned as raw base64; decoding its fields needs the program\'s IDL.',
     params: [
       { name: 'program', in: 'query', type: 'base58 address', description: 'The program that emitted the event.' },
-      { name: 'discriminator', in: 'query', type: '16 hex chars', description: 'The event type, as its 8-byte Anchor discriminator. Case-insensitive.' },
+      { name: 'discriminator', in: 'query', type: '16 hex chars', description: 'The event type, as its 8-byte Anchor discriminator. Case-insensitive. Needs program as well.' },
       { name: 'source', in: 'query', type: '"log" | "cpi"', description: 'log for emit!, cpi for emit_cpi!.' },
       LIMIT,
       OFFSET,
@@ -427,7 +427,7 @@ export const ENDPOINTS: Endpoint[] = [
     returns: 'program',
     notes: [
       'Answers 404 if the program has never been seen.',
-      'accountUpdates is empty unless the operator is watching the program.',
+      'accountUpdates is empty unless the program is on the watchlist.',
     ],
     response: {
       program: { id: PUMP, label: null },
@@ -462,7 +462,7 @@ export const ENDPOINTS: Endpoint[] = [
     path: '/api/accounts/:address',
     title: 'Account writes',
     summary:
-      'Every recorded write to one account, newest first. Only accounts the operator watches are recorded; any other address returns an empty list, not an error.',
+      'Every recorded write to one account, newest first. Only accounts on the watchlist are recorded; any other address returns an empty list, not an error.',
     params: [{ ...ADDRESS_PATH, description: 'The account (32 bytes, base58).' }, LIMIT, OFFSET],
     example: `/api/accounts/${ACCOUNT_UPDATE.pubkey}?limit=1`,
     returns: 'account-update',
@@ -700,11 +700,12 @@ export const OBJECTS: ObjectDoc[] = [
 /* ------------------------------------------------------------------ */
 
 export const ERRORS: { status: number; meaning: string; example: string }[] = [
-  { status: 400, meaning: 'A parameter is invalid: a malformed address, an unknown filter value, limit=0.', example: 'limit must be at least 1' },
+  { status: 400, meaning: 'A parameter is invalid: a malformed address, an unknown filter value, limit=0, or offset above 10,000.', example: 'limit must be at least 1' },
   { status: 401, meaning: 'No API key, or the key is unknown or revoked.', example: 'invalid or revoked API key' },
   { status: 402, meaning: 'The key is valid but the subscription is not paid up.', example: 'no active subscription: payment has lapsed or was never recorded' },
-  { status: 403, meaning: 'Anything other than GET. API keys are read-only.', example: 'API keys are read-only' },
-  { status: 404, meaning: 'The transaction, token or program has not been indexed.', example: 'token 1111…1111 is not indexed' },
-  { status: 429, meaning: 'This month\'s request quota is used up. It resets on the 1st (UTC).', example: 'monthly request quota used up; it resets on the 1st (UTC)' },
+  { status: 403, meaning: 'Anything other than GET or HEAD. API keys are read-only.', example: 'API keys are read-only' },
+  { status: 404, meaning: 'The transaction, token or program has not been indexed, or there is no such endpoint.', example: 'token 1111…1111 is not indexed' },
+  { status: 429, meaning: 'This month\'s request quota is used up (it resets on the 1st, UTC), or more than 1,200 requests in a minute. A Retry-After header says when to try again after a burst.', example: 'monthly request quota used up; it resets on the 1st (UTC)' },
   { status: 500, meaning: 'Something went wrong on our side. Retry later.', example: 'internal server error' },
+  { status: 503, meaning: 'The query would take too long (for example a very busy address with no other filter). Narrow it, or retry after Retry-After.', example: 'this query is too broad to answer quickly; narrow it with a filter or a smaller page' },
 ];

@@ -22,6 +22,8 @@ import { usePoll } from '@/hooks/use-poll';
 import { useWatchEntry, useWatchlist } from '@/hooks/use-watchlist';
 import { formatCount, programName, truncate } from '@/lib/format';
 import type { ProgramDetail } from '@/lib/api-types';
+import { isAddress } from '@/lib/address';
+import { InvalidAddress } from '@/components/console/invalid-address';
 
 /**
  * One program's page: what it has done, what it emits, and a button to put it
@@ -34,6 +36,11 @@ import type { ProgramDetail } from '@/lib/api-types';
 export default function ProgramPage({ params }: { params: Promise<{ programId: string }> }) {
   const { programId } = use(params);
 
+  if (!isAddress(programId)) return <InvalidAddress what="app" value={decodeURIComponent(programId)} />;
+  return <Program programId={programId} />;
+}
+
+function Program({ programId }: { programId: string }) {
   const detail = usePoll<ProgramDetail>(`/api/programs/${programId}?limit=25`, 5_000);
   const watchlist = useWatchlist();
   // The indexer's own view of this watch, which is what the status and the
@@ -41,8 +48,12 @@ export default function ProgramPage({ params }: { params: Promise<{ programId: s
   const watchEntry = useWatchEntry('program', programId);
 
   const program = detail.data;
+  // Never seen is a normal answer for a new or quiet app, not an outage: say
+  // it once, at the top, instead of as an error in every section.
+  const unseen = !program && detail.status === 404;
+  const error = unseen ? null : detail.error;
   // A dropped request with data still on screen is a hiccup, not an outage.
-  const health = program ? 'live' : detail.error ? 'stalled' : 'idle';
+  const health = unseen ? 'idle' : detail.error ? 'stalled' : program ? 'live' : 'idle';
 
   const eventTypes = program?.eventTypes ?? [];
   const invocations = program?.invocations ?? [];
@@ -51,14 +62,24 @@ export default function ProgramPage({ params }: { params: Promise<{ programId: s
     <>
       <StatusRail
         health={health}
-        detail={program ? `${formatCount(program.invocationCount)} times used` : 'reading'}
+        detail={
+          program
+            ? `${formatCount(program.invocationCount)} times used`
+            : unseen
+              ? 'not seen yet'
+              : 'reading'
+        }
       />
 
-      <main className="mx-auto w-full max-w-7xl">
+      <main id="main" className="mx-auto w-full max-w-7xl">
         <PageHead
           eyebrow="App (program)"
           value={program ? programName(program.program) : truncate(programId, 6, 6)}
-          explain="A program is code that lives on Solana — an exchange, a game, a token. Every time a transaction uses it, that is one “use” below. Press Watch to follow it live."
+          explain={
+            unseen
+              ? 'The indexer has not seen this app do anything yet. If it is new or rarely used, press Watch and its activity will appear here as soon as it happens.'
+              : 'A program is code that lives on Solana — an exchange, a game, a token. Every time a transaction uses it, that is one “use” below. Press Watch to follow it live.'
+          }
         >
           <div className="mt-5 text-xs" style={{ color: 'var(--dim)' }}>
             <Address value={programId} lead={12} tail={12} />
@@ -124,7 +145,7 @@ export default function ProgramPage({ params }: { params: Promise<{ programId: s
           )}
 
           <FeedState
-            error={detail.error}
+            error={error}
             loading={detail.loading}
             empty={invocations.length === 0}
             emptyMessage="Nothing recorded for this app yet. Press Watch above and its activity will start appearing within a few seconds."
@@ -163,7 +184,7 @@ export default function ProgramPage({ params }: { params: Promise<{ programId: s
           )}
 
           <FeedState
-            error={detail.error}
+            error={error}
             loading={detail.loading}
             empty={eventTypes.length === 0}
             emptyMessage="This app logs no events, or none have been seen yet. Its uses above are recorded either way."
@@ -179,7 +200,7 @@ export default function ProgramPage({ params }: { params: Promise<{ programId: s
           <AccountFeed
             updates={program?.accountUpdates ?? []}
             loading={detail.loading}
-            error={detail.error}
+            error={error}
             kind="program"
             watched={watchEntry !== null}
           />

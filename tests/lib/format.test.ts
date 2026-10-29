@@ -74,7 +74,7 @@ describe('timeAgo', () => {
   const now = Date.parse('2026-01-01T00:10:00Z');
 
   it('reads recent times in plain words', () => {
-    expect(timeAgo(null, now)).toBe('just now');
+    expect(timeAgo(null, now)).toBe('time unknown');
     expect(timeAgo('2026-01-01T00:09:58Z', now)).toBe('just now');
     expect(timeAgo('2026-01-01T00:09:30Z', now)).toBe('30s ago');
     expect(timeAgo('2026-01-01T00:05:00Z', now)).toBe('5m ago');

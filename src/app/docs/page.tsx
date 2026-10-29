@@ -1,6 +1,8 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 import { headers } from 'next/headers';
 import { PLANS } from '@/access/plans';
+import { PUBLIC_URL } from '@/config';
 import { CopyButton } from './copy-button';
 import { ENDPOINTS, ERRORS, OBJECTS, type Endpoint, type Param } from './reference';
 
@@ -20,8 +22,17 @@ export default async function DocsPage() {
     <div className="mx-auto flex w-full max-w-7xl gap-10 px-4 pb-24 sm:px-8">
       <Sidebar />
 
-      <main className="min-w-0 flex-1">
-        <header className="pt-12 pb-6">
+      <main id="main" className="min-w-0 flex-1">
+        <header className="pt-8 pb-6">
+          {/* The docs have no console nav, so this is the way back on any screen size. */}
+          <Link
+            href="/"
+            className="mb-8 inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-sm transition-colors hover:text-[var(--ink)]"
+            style={{ borderColor: 'var(--rule-strong)', color: 'var(--dim)' }}
+          >
+            <span aria-hidden>←</span> Back to the live feed
+          </Link>
+
           <p className="text-xs uppercase tracking-[0.2em]" style={{ color: 'var(--dim)' }}>
             API reference
           </p>
@@ -54,7 +65,8 @@ export default async function DocsPage() {
           <Prose>
             <p>
               Requests count against your plan&apos;s monthly quota, shared by all your keys. The
-              count resets on the 1st of each month (UTC). Every successful response includes:
+              count resets on the 1st of each month (UTC). Requests answered with an error are
+              not counted. Every successful response includes:
             </p>
           </Prose>
           <SimpleTable
@@ -351,6 +363,8 @@ function json(value: unknown): string {
 
 /** The URL customers should call: this server, as they reached it. */
 async function baseUrl(): Promise<string> {
+  if (PUBLIC_URL) return PUBLIC_URL;
+
   const h = await headers();
   const host = h.get('x-forwarded-host') ?? h.get('host') ?? 'localhost:8003';
   // A TLS proxy in front says so; with none, the browser came in over plain http.

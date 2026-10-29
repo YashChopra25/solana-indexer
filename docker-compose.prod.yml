@@ -2,8 +2,9 @@
 #
 #   npm run up -- --deploy
 #
-# Runs the built image instead of the bind-mounted dev server, and keeps every
-# service running across crashes and reboots.
+# Runs the built image instead of the bind-mounted dev server, keeps every
+# service running across crashes and reboots, puts Caddy (TLS) in front of the
+# app, and backs the database up every day.
 
 x-prod: &prod
   build:
@@ -12,6 +13,11 @@ x-prod: &prod
   image: solana-indexer-prod
   environment:
     NODE_ENV: production
+    # Required in production: refusing to start beats running on the default.
+    DATABASE_URL: postgresql://indexer:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/solana_indexer
+  logging:
+    driver: json-file
+    options: { max-size: '20m', max-file: '5' }
 
 services:
   migrate:
@@ -24,6 +30,17 @@ services:
     # Run the baked-in source, not the dev bind mount.
     volumes: !reset []
     command: npm start
+    # Not published: only Caddy reaches it, so every request has come through
+    # TLS and carries a client address the app can trust.
+    ports: !reset []
+    expose:
+      - '8003'
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:8003/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     restart: always
 
   worker:
@@ -35,4 +52,65 @@ services:
     restart: always
 
   postgres:
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
     restart: always
+    logging:
+      driver: json-file
+      options: { max-size: '20m', max-file: '5' }
+
+  caddy:
+    image: caddy:2.10
+    container_name: solana-indexer-caddy
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      web:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options: { max-size: '20m', max-file: '5' }
+    restart: always
+
+  # A compressed dump every day, the last 14 kept, in ./backups on the host.
+  # Copy that folder somewhere off this server too: a backup on the same disk
+  # does not survive losing the disk.
+  backup:
+    image: postgres:17-alpine
+    container_name: solana-indexer-backup
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - ./backups:/backups
+    entrypoint: ['/bin/sh', '-c']
+    command:
+      - |
+        while true; do
+          file=/backups/solana_indexer-$$(date -u +%Y%m%dT%H%M%SZ).dump
+          if pg_dump -h postgres -U indexer -d solana_indexer -Fc -f "$$file.partial"; then
+            mv "$$file.partial" "$$file" && echo "backup written: $$file"
+          else
+            rm -f "$$file.partial"; echo "backup FAILED" >&2
+          fi
+          ls -1t /backups/*.dump 2>/dev/null | tail -n +15 | xargs -r rm -f
+          sleep 86400
+        done
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options: { max-size: '5m', max-file: '3' }
+    restart: always
+
+volumes:
+  caddy-data:
+  caddy-config:

@@ -119,7 +119,7 @@ watching worth anything:
 | `accounts` | **writes to the account itself**, whoever caused them |
 
 The transactions filter alone is close to useless for watching, because the
-default baseline (System + Token) already matches nearly every transaction on
+default baseline (System, Token, Token-2022) already matches nearly every transaction on
 the chain — adding one more address narrows nothing. An `accounts` subscription
 asks a different question entirely, and its answer does not depend on the
 baseline at all.
@@ -149,9 +149,20 @@ signature.
 They are separate because the worker cannot see IndexedDB: the two processes
 share nothing but Postgres. So the table is the *union* of what every browser
 has asked for, while IndexedDB is one person's list. `/watching` shows both
-sides, including the two ways they can disagree — an entry saved locally that
-never reached the indexer, and one the indexer holds that this browser has never
-seen.
+sides.
+
+Nobody signs in to watch, so each browser carries a random id in its `console`
+cookie, and `watch_owners` records which browsers want each entry. Removing a
+watch drops only your browser's claim; the indexer stops watching once nobody
+wants it. Every watch is a filter on the one stream, so the list is capped
+(`MAX_WATCHES`, default 100) and so is each browser (`MAX_WATCHES_PER_VISITOR`,
+default 10). The signed-in operator is exempt from the second cap and can remove
+any entry. If the two lists drift — a mirror call failed, a cookie was cleared —
+the page re-sends this browser's entries on the next load, and drops any the
+server refuses for good. A claim lapses after 30 days without the browser
+coming back, which frees its place once the list is full. Programs that own
+most of the chain (System, the token programs, Vote, Stake, the loaders) cannot
+be watched at all: following everything they own would flood the stream.
 
 With the default `TRACKED_PROGRAM_IDS` the transaction half of watching changes
 little, for the reason above; the accounts half works regardless. Narrow the
@@ -259,6 +270,15 @@ that is one slot per commit; when catching up after a reconnect it is up to 50,
 which is the difference between draining a backlog and running out of memory
 holding it.
 
+**The checkpoint never passes a slot still being received.** A newer slot can
+finish before an older one, so the checkpoint is held just below the oldest slot
+still in the buffer. A commit that fails puts its slots back and is retried on
+the next flush, waiting longer after each failure (up to 30 seconds), so a
+database restart of a few minutes costs nothing; after `MAX_COMMIT_FAILURES` in
+a row the worker exits for its
+supervisor, and resumes from a checkpoint that is still sound. On shutdown only
+finished slots are written; unfinished ones are replayed on restart.
+
 **Replaying a slot changes nothing.** The stream replays after a reconnect and a
 restart re-reads the slot it died on, so double writes are normal operation.
 Every table is keyed by something the chain already guarantees is unique, and
@@ -284,9 +304,7 @@ every insert ends in `ON CONFLICT DO NOTHING`.
 | `GET /api/tokens/:mint` | A mint, and how much it has moved and traded |
 | `GET /api/programs/:programId` | A program's footprint, event types, recent events and invocations |
 | `GET /api/accounts/:address` | Writes to a watched account |
-| `GET /api/watchlist` | What the indexer is watching |
-| `POST /api/watchlist` | Watch a program or wallet — `{kind, address, label?}` |
-| `DELETE /api/watchlist` | Stop watching — `{kind, address}` |
+| `GET` / `POST` / `DELETE /api/watchlist` | The console's watchlist — not part of the paid API; keys get `403` |
 
 List endpoints take `limit` (default 25, max 100) and `offset`, and answer with
 a `pagination` object. Filters:
@@ -347,13 +365,17 @@ npm run admin -- key revoke sk_iwaMhgo                        # by the prefix `k
   the current end date, so paying early loses nothing.
 - **Keys** are stored as SHA-256 hashes. A database dump cannot call the API.
 - **The console** is open to anyone, watchlist included. Only the **Customers**
-  page (`/admin`), where keys are made and revoked, asks for `ADMIN_PASSWORD`.
-  Leave it unset in development and `/admin` stays open. In production, unset
-  means nobody can sign in.
-- **Keyless calls** are let through when they carry the `console` cookie, which
-  every console page sets (`SameSite=Lax`, so other sites cannot use it). A
-  script can fetch a page and reuse it, so this keeps the console free; it is
-  not what protects `/admin`.
+  page (`/admin`), where keys are made and revoked, asks for `ADMIN_PASSWORD`;
+  unset, nobody can sign in, in every environment. The page checks the session
+  itself as well as the proxy.
+- **Keyless calls** are let through only with the `console` cookie that console
+  pages hand out: a random id signed by the server, so it cannot be made up, and
+  refused when the browser says the call came from another site. Each cookie is
+  held to 90 requests a minute — comfortable for a person with a couple of tabs,
+  too slow to be worth scraping. A key is the way past that.
+- **Failed requests are free.** A keyed request is counted when it arrives, so
+  the quota is exact under load, and handed back if the answer is an error
+  (`4xx`/`5xx`), including unknown paths.
 
 ---
 
@@ -365,17 +387,28 @@ to set is `HELIUS_API_KEY`.
 | Variable | Default | What it does |
 | --- | --- | --- |
 | `HELIUS_API_KEY` | — | Required by the worker; the console runs without it |
-| `ADMIN_PASSWORD` | — | Login for `/admin` (customers and keys); unset keeps it open in development only |
+| `ADMIN_PASSWORD` | — | Login for `/admin` (customers and keys); unset, nobody can sign in |
+| `APP_SECRET` | from `ADMIN_PASSWORD` | Signs the console cookie |
 | `DATABASE_URL` | local docker | Postgres connection string |
 | `LASERSTREAM_ENDPOINT` | US East | Pick the region nearest you |
-| `COMMITMENT` | `confirmed` | `processed` \| `confirmed` \| `finalized` |
-| `TRACKED_PROGRAM_IDS` | System + Token | Which programs bring a transaction in |
-| `WATCHLIST_POLL_MS` | 5000 | How often the worker re-reads the watchlist |
+| `COMMITMENT` | `confirmed` | `confirmed` \| `finalized`; `processed` is refused (dropped forks are never rolled back) |
+| `TRACKED_PROGRAM_IDS` | System + Token + Token-2022 | Which programs bring a transaction in |
 | `TOKEN_LIST_ENDPOINT` | Jupiter | Where mint symbols are looked up |
 | `TOKEN_SYNC_INTERVAL_MS` | 60000 | Background symbol sweep; 0 turns it off |
-| — | 20000 | `MAX_PENDING_ACCOUNT_UPDATES`, the account-write queue cap |
+| `PUBLIC_URL` | from the request | Public address, for redirects and the `/docs` examples |
+| `SITE_ADDRESS` | `:80` | The domain Caddy serves and gets a TLS certificate for (production) |
+| `POSTGRES_PASSWORD` | `indexer` | Database password; set before the first `up` |
+| `DB_POOL_MAX` | 10 | Connections per process |
+| `DB_STATEMENT_TIMEOUT_MS` / `WORKER_STATEMENT_TIMEOUT_MS` | 5000 / 60000 | Longest one query may run in the web app / the worker; a cut-off API query answers `503` |
+| `MAX_WATCHES` / `MAX_WATCHES_PER_VISITOR` | 100 / 10 | Watchlist caps |
+| `MAX_BUFFERED_SLOTS` / `MAX_BUFFERED_TRANSACTIONS` | 600 / 150000 | Worker stops and restarts past these, rather than run out of memory |
+| `MAX_COMMIT_FAILURES` | 15 | Failed commits in a row before the worker restarts |
+| `LOG_LEVEL` / `LOG_FORMAT` | `info` / `json` in production | Log verbosity and shape |
 
-`TRACKED_PROGRAM_IDS` decides what gets ingested at all. The default pair covers
+A bad value in any of these stops the process at startup with a message naming
+it, rather than running with a guess.
+
+`TRACKED_PROGRAM_IDS` decides what gets ingested at all. The default three cover
 every SOL and SPL movement — and therefore every swap, since a balance cannot
 change without one of them. Adding a DEX narrows nothing because it is already
 covered; adding an unrelated program (governance, an NFT marketplace) brings its
@@ -391,7 +424,7 @@ npm run indexer    # ingestion worker
 npm run seed       # sample data, no Helius key needed
 npm run tokens:sync # name the mints already indexed
 npm run admin      # customers, payments, API keys (see Selling access)
-npm test           # extractors, slot buffer, HTTP validation
+npm test           # unit tests; database tests too when TEST_DATABASE_URL is set
 npm run migrate    # apply migrations (the worker does this too)
 
 npm run up                # the whole project in containers, dev mode
@@ -408,16 +441,55 @@ npm run db:reset   # stop it and delete the data
 Browse the tables at http://localhost:8080 with
 `docker compose --profile tools up -d adminer`.
 
-`docker-compose.yml` is the only compose file: full stack by default, or
-`up -d postgres` for the database alone, so the two workflows cannot drift
-apart.
+`docker-compose.yml` is the base: full stack by default, or `up -d postgres`
+for the database alone, so the two workflows cannot drift apart.
+`docker-compose.prod.yml` layers the production changes on top of it.
 
 ---
 
+## Running it for customers
+
+One server, one command:
+
+```bash
+cp .env.example .env   # set HELIUS_API_KEY, ADMIN_PASSWORD, SITE_ADDRESS,
+                       # PUBLIC_URL and POSTGRES_PASSWORD
+npm run up -- --deploy
+```
+
+- **Caddy** is the only thing listening on the internet (80/443). With
+  `SITE_ADDRESS` set to a domain pointing at the server it gets and renews the
+  TLS certificate itself. Without a domain the site is plain http, and the
+  admin password crosses the network in the clear.
+- **The app** is not published directly; Caddy forwards to it, which is also
+  what makes the per-client rate limits trustworthy.
+- **Database password**: `POSTGRES_PASSWORD` is required; the deploy refuses to
+  start without it. Postgres only reads it when it first creates its volume, so
+  on a server already running with the old default, either set it to `indexer`
+  or change it inside Postgres first
+  (`docker compose exec postgres psql -U indexer -c "ALTER USER indexer PASSWORD '...'"`).
+- **Backups**: a `pg_dump` every 24 hours into `./backups`, the newest 14 kept.
+  Copy that folder off the server as well. To restore one:
+
+  ```bash
+  docker compose -f docker-compose.yml -f docker-compose.prod.yml stop web worker
+  docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T postgres \
+    pg_restore -U indexer -d solana_indexer --clean --if-exists < backups/<file>.dump
+  docker compose -f docker-compose.yml -f docker-compose.prod.yml start web worker
+  ```
+- **Health**: point an uptime monitor at `/api/health`. It answers 503 when the
+  database is unreachable and reports `worker.ok: false` when the worker has not
+  committed for two minutes.
+- **Limits** (in memory): 90 console requests a minute per browser and 600 per
+  network address; 1,200 a minute per API key on top of its monthly quota, and
+  3,000 per network before a key is even looked up; 10 sign-in attempts per 15
+  minutes; 30 watchlist changes an hour. Running more than one `web` replica
+  would need these moved to a shared store such as Redis.
+
 ## What this is not
 
-There is no CI, no Kubernetes, no cloud deployment, no autoscaling, no Kafka, no
-IDL registry, and no per-DEX decoders. If the stream fails in a way the Helius
-SDK cannot recover from, the worker prints why and exits — start it again and it
-picks up from its checkpoint. That is the right amount of machinery for a project
-meant to be read and run locally.
+There is no CI, no Kubernetes, no autoscaling, no Kafka, no IDL registry, no
+payment provider and no per-DEX decoders. It runs on one server; reorgs are
+avoided by refusing `processed` commitment rather than rolled back; and if the
+worker is down for longer than LaserStream keeps history to replay, that gap is
+not backfilled.
