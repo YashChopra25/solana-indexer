@@ -1,5 +1,5 @@
-import { SESSION_COOKIE, SESSION_TTL_SECONDS, safeEqual, signSession } from '@/access/session';
-import { ADMIN_PASSWORD, IS_PRODUCTION } from '@/config';
+import { SESSION_COOKIE, SESSION_TTL_SECONDS, isHttps, safeEqual, signSession } from '@/access/session';
+import { ADMIN_PASSWORD } from '@/config';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,13 +10,11 @@ export const dynamic = 'force-dynamic';
 export async function POST(request: Request) {
   const form = await request.formData();
   const password = String(form.get('password') ?? '');
-  const next = safeNext(String(form.get('next') ?? '/'));
+  const next = safeNext(String(form.get('next') ?? '/admin'));
 
   if (!ADMIN_PASSWORD || !safeEqual(password, ADMIN_PASSWORD)) {
-    const retry = new URL('/login', request.url);
-    retry.searchParams.set('error', ADMIN_PASSWORD ? 'wrong' : 'unset');
-    retry.searchParams.set('next', next);
-    return Response.redirect(retry, 303);
+    const retry = new URLSearchParams({ error: ADMIN_PASSWORD ? 'wrong' : 'unset', next });
+    return redirect(`/login?${retry}`);
   }
 
   const cookie = [
@@ -25,15 +23,21 @@ export async function POST(request: Request) {
     `Max-Age=${SESSION_TTL_SECONDS}`,
     'HttpOnly',
     'SameSite=Lax',
-    // Over plain http (local dev) a Secure cookie would never be sent back.
-    ...(IS_PRODUCTION ? ['Secure'] : []),
+    // Over plain http a Secure cookie would never be sent back.
+    ...(isHttps(request) ? ['Secure'] : []),
   ].join('; ');
 
-  // Built by hand because Response.redirect's headers are immutable.
-  return new Response(null, {
-    status: 303,
-    headers: { Location: new URL(next, request.url).toString(), 'Set-Cookie': cookie },
-  });
+  return redirect(next, { 'Set-Cookie': cookie });
+}
+
+/**
+ * A 303 to a path on this site. The Location is relative on purpose:
+ * request.url carries the address the server is bound to (0.0.0.0 in Docker),
+ * not the one the browser used. Built by hand because Response.redirect wants
+ * an absolute URL and its headers are immutable.
+ */
+function redirect(path: string, headers: Record<string, string> = {}): Response {
+  return new Response(null, { status: 303, headers: { Location: path, ...headers } });
 }
 
 /** Only a path on this site, so the form cannot be used to bounce people elsewhere. */

@@ -23,7 +23,7 @@ services:
     <<: *prod
     # Run the baked-in source, not the dev bind mount.
     volumes: !reset []
-    command: npm start -- -H 0.0.0.0
+    command: npm start
     restart: always
 
   worker:

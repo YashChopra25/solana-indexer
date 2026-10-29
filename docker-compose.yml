@@ -76,9 +76,9 @@ services:
   web:
     <<: *app
     container_name: solana-indexer-web
-    # `next dev` binds loopback by default, which inside a container is
-    # unreachable from the host.
-    command: npm run dev -- -H 0.0.0.0
+    # No -H: `next dev` already listens on every interface, and binding
+    # 0.0.0.0 explicitly makes Next build request URLs on http://0.0.0.0.
+    command: npm run dev
     ports:
       - '8003:8003'
     depends_on:

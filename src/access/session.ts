@@ -12,6 +12,9 @@ import { ADMIN_PASSWORD, IS_PRODUCTION } from '../config';
 
 export const SESSION_COOKIE = 'admin_session';
 
+/** Set on anyone who opens a console page; lets that page call /api/* without a key. */
+export const CONSOLE_COOKIE = 'console';
+
 export const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 /**
@@ -43,6 +46,17 @@ export function safeEqual(a: string, b: string): boolean {
   const left = Buffer.from(a);
   const right = Buffer.from(b);
   return left.length === right.length && timingSafeEqual(left, right);
+}
+
+/**
+ * Whether the browser reached us over https, so cookies can be marked Secure.
+ * Asked of the request rather than NODE_ENV: a production server on plain
+ * http would otherwise set Secure cookies the browser never sends back, and
+ * signing in would quietly fail. Behind a TLS proxy, x-forwarded-proto says so.
+ */
+export function isHttps(request: Request): boolean {
+  const forwarded = request.headers.get('x-forwarded-proto')?.split(',')[0].trim();
+  return (forwarded ?? new URL(request.url).protocol.replace(':', '')) === 'https';
 }
 
 function sign(password: string, value: string): string {

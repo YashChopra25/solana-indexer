@@ -353,6 +353,7 @@ function json(value: unknown): string {
 async function baseUrl(): Promise<string> {
   const h = await headers();
   const host = h.get('x-forwarded-host') ?? h.get('host') ?? 'localhost:8003';
-  const proto = h.get('x-forwarded-proto') ?? (host.startsWith('localhost') ? 'http' : 'https');
+  // A TLS proxy in front says so; with none, the browser came in over plain http.
+  const proto = h.get('x-forwarded-proto')?.split(',')[0].trim() ?? 'http';
   return `${proto}://${host}`;
 }

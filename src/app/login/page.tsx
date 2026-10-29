@@ -1,6 +1,6 @@
 /**
- * The operator's way into the console. Customers never see this page: they
- * use the API with a key.
+ * The operator's way into /admin, where customers and API keys are managed.
+ * The rest of the console is open; customers use the API with a key.
  */
 
 const MESSAGE: Record<string, string> = {
@@ -13,7 +13,7 @@ export default async function LoginPage({
 }: {
   searchParams: Promise<{ next?: string; error?: string }>;
 }) {
-  const { next = '/', error } = await searchParams;
+  const { next = '/admin', error } = await searchParams;
 
   return (
     <main className="flex flex-1 items-center justify-center px-4 py-16">
@@ -27,7 +27,7 @@ export default async function LoginPage({
           Solana <span className="grad-text">Indexer</span>
         </h1>
         <p className="mt-2 text-sm" style={{ color: 'var(--dim)' }}>
-          Sign in to the console.
+          Sign in to manage customers and API keys.
         </p>
 
         <input type="hidden" name="next" value={next} />

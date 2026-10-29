@@ -302,8 +302,9 @@ curl -H "Authorization: Bearer $KEY" 'localhost:8003/api/events?source=cpi'
 curl -H "Authorization: Bearer $KEY" 'localhost:8003/api/wallets/<address>/activity?kind=swap,transfer'
 ```
 
-Every endpoint except `/api/health` needs either an API key (customers) or a
-signed-in console session (you). See [Selling access](#selling-access).
+Called from your own code, every endpoint except `/api/health` needs an API key.
+The console's pages call the same endpoints from the browser without one. See
+[Selling access](#selling-access).
 
 The full reference for customers lives at **`/docs`**. It's public and covers every
 endpoint's parameters, a sample request and a real sample response, and the
@@ -345,8 +346,14 @@ npm run admin -- key revoke sk_iwaMhgo                        # by the prefix `k
 - **A payment** extends access by `--months` from whichever is later, today or
   the current end date, so paying early loses nothing.
 - **Keys** are stored as SHA-256 hashes. A database dump cannot call the API.
-- **The console** asks for `ADMIN_PASSWORD`. Leave it unset in development and
-  the console stays open. In production, unset means nobody can sign in.
+- **The console** is open to anyone, watchlist included. Only the **Customers**
+  page (`/admin`), where keys are made and revoked, asks for `ADMIN_PASSWORD`.
+  Leave it unset in development and `/admin` stays open. In production, unset
+  means nobody can sign in.
+- **Keyless calls** are let through when they carry the `console` cookie, which
+  every console page sets (`SameSite=Lax`, so other sites cannot use it). A
+  script can fetch a page and reuse it, so this keeps the console free; it is
+  not what protects `/admin`.
 
 ---
 
@@ -358,7 +365,7 @@ to set is `HELIUS_API_KEY`.
 | Variable | Default | What it does |
 | --- | --- | --- |
 | `HELIUS_API_KEY` | — | Required by the worker; the console runs without it |
-| `ADMIN_PASSWORD` | — | Console login; unset keeps it open in development only |
+| `ADMIN_PASSWORD` | — | Login for `/admin` (customers and keys); unset keeps it open in development only |
 | `DATABASE_URL` | local docker | Postgres connection string |
 | `LASERSTREAM_ENDPOINT` | US East | Pick the region nearest you |
 | `COMMITMENT` | `confirmed` | `processed` \| `confirmed` \| `finalized` |

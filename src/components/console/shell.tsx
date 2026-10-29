@@ -93,15 +93,18 @@ export function StatusRail({ health, detail }: { health: Health; detail: string 
             );
           })}
 
-          <form method="post" action="/api/logout" className="shrink-0">
-            <button
-              type="submit"
-              className="rounded-full px-3.5 py-1.5 transition-colors hover:text-[var(--ink)]"
-              style={{ color: 'var(--dim)' }}
-            >
-              Sign out
-            </button>
-          </form>
+          {/* Only /admin needs signing in, so that is the only place to sign out. */}
+          {pathname.startsWith('/admin') && (
+            <form method="post" action="/api/logout" className="shrink-0">
+              <button
+                type="submit"
+                className="rounded-full px-3.5 py-1.5 transition-colors hover:text-[var(--ink)]"
+                style={{ color: 'var(--dim)' }}
+              >
+                Sign out
+              </button>
+            </form>
+          )}
         </nav>
       </div>
     </header>

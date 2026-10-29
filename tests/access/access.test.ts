@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { checkKey, generateKey, hashKey, readKey, type KeyRecord } from '../../src/access/keys';
 import { readAmount, readCurrency, readEmail, readMonths, readPlan } from '../../src/access/input';
-import { signSession, verifySession } from '../../src/access/session';
+import { isHttps, signSession, verifySession } from '../../src/access/session';
 
 const NOW = new Date('2026-10-07T12:00:00Z');
 
@@ -83,6 +83,18 @@ describe('admin session', () => {
     const later = now + 8 * 24 * 60 * 60 * 1000;
     expect(verifySession('pw', signSession('pw', now), later)).toBe(false);
     expect(verifySession('pw', undefined, now)).toBe(false);
+  });
+});
+
+describe('isHttps', () => {
+  it('reads the scheme off the request when nothing is in front', () => {
+    expect(isHttps(new Request('http://16.58.93.201:8003/'))).toBe(false);
+    expect(isHttps(new Request('https://indexer.dev/'))).toBe(true);
+  });
+
+  it('trusts a TLS proxy over the scheme the server saw', () => {
+    const request = new Request('http://0.0.0.0:8003/', { headers: { 'x-forwarded-proto': 'https, http' } });
+    expect(isHttps(request)).toBe(true);
   });
 });
 

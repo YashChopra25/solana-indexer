@@ -22,4 +22,6 @@ RUN npm run build
 
 EXPOSE 8003
 
-CMD ["npm", "start", "--", "-H", "0.0.0.0"]
+# No -H: `next start` already listens on every interface, and binding
+# 0.0.0.0 explicitly makes Next build request URLs on http://0.0.0.0.
+CMD ["npm", "start"]
